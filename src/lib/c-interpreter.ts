@@ -851,6 +851,66 @@ function preprocessArduinoSerial(src: string): { source: string; beginLines: Set
 }
 
 /**
+ * Reescreve chamadas de método em objetos de biblioteca (não-Serial) para '0',
+ * incluindo cadeias como dht.temperature().getEvent(&t).
+ * Preserva a contagem de linhas substituindo por espaços de mesmo comprimento.
+ */
+function preprocessLibraryMethodCalls(src: string): string {
+  const findMatchingParen = (s: string, openIdx: number): number => {
+    let depth = 0;
+    for (let i = openIdx; i < s.length; i++) {
+      const c = s[i];
+      if (c === '"' || c === "'") {
+        const q = c; i++;
+        while (i < s.length && s[i] !== q) { if (s[i] === "\\") i++; i++; }
+        continue;
+      }
+      if (c === "(") depth++;
+      else if (c === ")") { depth--; if (depth === 0) return i; }
+    }
+    return -1;
+  };
+  const re = /\b([A-Za-z_]\w*)\s*\.\s*[A-Za-z_]\w*\s*\(/g;
+  let out = src;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(out)) !== null) {
+    if (match[1] === "Serial") continue;
+    const startIdx = match.index;
+    const openParen = match.index + match[0].length - 1;
+    const close = findMatchingParen(out, openParen);
+    if (close < 0) continue;
+    let endIdx = close + 1;
+    // estender para chamadas encadeadas: .metodo(...)
+    let chain: RegExpMatchArray | null;
+    while ((chain = out.slice(endIdx).match(/^\s*\.\s*[A-Za-z_]\w*\s*\(/))) {
+      const chainOpen = endIdx + chain[0].length - 1;
+      const chainClose = findMatchingParen(out, chainOpen);
+      if (chainClose < 0) break;
+      endIdx = chainClose + 1;
+    }
+    const original = out.slice(startIdx, endIdx);
+    const nls = (original.match(/\n/g) || []).length;
+    const replacement = "0" + " ".repeat(original.length - 1 - nls) + "\n".repeat(nls);
+    out = out.slice(0, startIdx) + replacement + out.slice(endIdx);
+    re.lastIndex = startIdx + replacement.length;
+  }
+  return out;
+}
+
+/**
+ * Reescreve acessos a campos de structs de biblioteca (ex.: temperatura.temperature)
+ * para '0', preservando comprimento da linha.
+ * Roda após preprocessLibraryMethodCalls para não conflitar com chamadas de método.
+ */
+function preprocessStructMemberAccess(src: string): string {
+  // Substitui identifier.identifier que NÃO é seguido de '(' (campo, não método)
+  return src.replace(/\b([A-Za-z_]\w*)\s*\.\s*([A-Za-z_]\w*)(?!\s*\()/g, (match, obj) => {
+    if (obj === "Serial") return match;
+    return "0" + " ".repeat(match.length - 1);
+  });
+}
+
+/**
  * Conta '{' e '}' fora de strings, chars e comentários.
  * Usado para detectar chaves desbalanceadas com mensagem clara.
  */
@@ -937,8 +997,10 @@ export class CInterpreter {
     };
     try {
       const directives: Directive[] = [];
-      const { source: preprocessed, beginLines } = preprocessArduinoSerial(source);
+      const { source: afterSerial, beginLines } = preprocessArduinoSerial(source);
       this.serialBeginLines = beginLines;
+      const afterMethods = preprocessLibraryMethodCalls(afterSerial);
+      const preprocessed = preprocessStructMemberAccess(afterMethods);
 
       // Verificação de balanceamento de chaves '{' e '}' antes do parsing.
       // Ignora ocorrências dentro de strings, chars e comentários.
