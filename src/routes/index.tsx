@@ -44,17 +44,8 @@ void loop() {
 
 const SAMPLE_C = `#include <stdio.h>
 
-int dobro(int n) {
-\tint resultado = n * 2;
-\treturn resultado;
-}
-
 int main() {
-\tint i, r;
-\tfor (i = 1; i <= 5; i++) {
-\t\tr = dobro(i);
-\t\tprintf("%d x 2 = %d\\n", i, r);
-\t}
+\tprintf("Olá, mundo!\\n");
 \treturn 0;
 }`;
 
