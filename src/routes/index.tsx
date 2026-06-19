@@ -59,8 +59,8 @@ int main() {
 }`;
 
 function Index() {
-  const [sampleType, setSampleType] = useState<"arduino" | "c">("arduino");
-  const [code, setCode] = useState(SAMPLE_ARDUINO);
+  const [sampleType, setSampleType] = useState<"arduino" | "c">("c");
+  const [code, setCode] = useState(SAMPLE_C);
   const [msPerLoop, setMsPerLoop] = useState(100);
   const [interp, setInterp] = useState<CInterpreter | null>(null);
   const [, setTick] = useState(0);
