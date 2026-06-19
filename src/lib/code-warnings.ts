@@ -10,7 +10,7 @@ export interface CodeWarning {
   severity: "warning" | "info";
 }
 
-const COMMENT_RE = /\/\/.*$|\/\*[\s\S]*?\*\//g;
+const COMMENT_RE = /\/\/[^\n]*|\/\*[\s\S]*?\*\//g;
 
 function stripComments(src: string): string {
   return src.replace(COMMENT_RE, (m) => m.replace(/[^\n]/g, " "));
@@ -35,6 +35,8 @@ export function analyzeCode(code: string, mode: "arduino" | "c" = "arduino"): Co
   lines.forEach((ln, i) => {
     const m = ln.match(declAssignRe);
     if (!m) return;
+    // Ignorar se o "nome" capturado é ele próprio um tipo (ex.: unsigned long tempoAtual)
+    if (new RegExp(`^(?:${TYPE_KW})$`).test(m[1])) return;
     // Ignorar se for declaração de função: nome seguido de '('
     if (/^\s*\(/.test(m[2])) return;
     warnings.push({
