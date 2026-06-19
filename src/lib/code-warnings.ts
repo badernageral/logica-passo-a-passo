@@ -268,8 +268,9 @@ function findUndeclaredUsages(cleaned: string): CodeWarning[] {
   const lines = cleaned.split("\n");
 
   // Declarações do tipo: <type> name1, name2, ...;
+  // O prefixo (?:unsigned|signed|long\s+)* trata tipos compostos como "unsigned long"
   const declRe = new RegExp(
-    `\\b(?:${TYPE_KW})\\b([^;{}]+?)(?=[;{])`,
+    `\\b(?:(?:unsigned|signed|long)\\s+)*(?:${TYPE_KW})\\b([^;{}]+?)(?=[;{])`,
     "g",
   );
   let m: RegExpExecArray | null;
@@ -292,7 +293,7 @@ function findUndeclaredUsages(cleaned: string): CodeWarning[] {
 
   // for (int i = ...; ...) — declRe acima não pega porque está dentro de ()
   const forRe = new RegExp(
-    `\\bfor\\s*\\(\\s*(?:${TYPE_KW})\\s+([A-Za-z_]\\w*)`,
+    `\\bfor\\s*\\(\\s*(?:(?:unsigned|signed|long)\\s+)*(?:${TYPE_KW})\\s+([A-Za-z_]\\w*)`,
     "g",
   );
   while ((m = forRe.exec(cleaned)) !== null) declared.add(m[1]);
