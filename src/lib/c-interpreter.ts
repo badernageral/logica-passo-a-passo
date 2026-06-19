@@ -1145,7 +1145,15 @@ export class CInterpreter {
         });
       }
 
-      // executar globais primeiro (declarações)
+      // Pré-executar declarações globais para que os cards apareçam imediatamente ao iniciar.
+      // As tarefas de declaração ainda ficam na fila intro para a animação passo a passo.
+      for (const g of globals) {
+        if (g.k === "decl") {
+          for (const it of g.items) {
+            this.vars.push(this.makeVarFromItem(g.type, it, "global", false));
+          }
+        }
+      }
       for (const g of globals) intro.push({ kind: "stmt", stmt: g, scope: "global" });
 
       const setupFn = this.fns["setup"];
@@ -1883,9 +1891,16 @@ export class CInterpreter {
       case "decl": {
         const names: string[] = [];
         for (const it of s.items) {
-          this.vars.push(this.makeVarFromItem(s.type, it, scope, true));
           const dimsStr = it.dims ? "[" + it.dims.join("][") + "]" : "";
           names.push(it.name + dimsStr);
+          const existing = this.vars.find(v => v.name === it.name && v.scope === scope);
+          if (existing) {
+            // Variável já pré-criada (global): reinicializa o valor e sinaliza animação
+            if (it.init) existing.value = this.coerce(s.type, this.evalExpr(it.init, scope));
+            existing.justCreated = true;
+          } else {
+            this.vars.push(this.makeVarFromItem(s.type, it, scope, true));
+          }
         }
         return { kind: "create-var", line: s.line, message: `Criando variável(is): ${names.join(", ")}`, varName: s.items[0].name };
       }
