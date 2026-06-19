@@ -814,7 +814,11 @@ function preprocessLibraryTypeDeclarations(src: string): string {
     const nls = (original.match(/\n/g) || []).length;
     let replacement: string;
 
-    if (/^\d+$/.test(firstArg)) {
+    if (match[6] === ";") {
+      // Declaração simples sem construtor: cria variável float para cards de memória
+      const content = `${match[1]}float ${match[4]};`;
+      replacement = pad(content, original.length, nls);
+    } else if (/^\d+$/.test(firstArg)) {
       // Construtor com número de pino → cria card via pinMode
       const content = `${match[1]}pinMode(${firstArg}, INPUT);`;
       replacement = pad(content, original.length, nls);
@@ -826,6 +830,21 @@ function preprocessLibraryTypeDeclarations(src: string): string {
     re.lastIndex = startIdx + replacement.length;
   }
   return out;
+}
+
+/**
+ * Converte chamadas getEvent(&var) em scanf para simular leitura de sensor.
+ *   dht.temperature().getEvent(&temperatura);  →  scanf("%f", &temperatura);
+ * Deve rodar antes de preprocessLibraryMethodCalls.
+ */
+function preprocessGetEvent(src: string): string {
+  return src.split("\n").map(line => {
+    const m = line.match(/^([ \t]*).*\.getEvent\s*\(\s*&\s*([A-Za-z_]\w*)\s*\)([ \t]*;?)[ \t]*$/);
+    if (!m) return line;
+    const [, indent, varName, semi] = m;
+    const content = `${indent}scanf("%f", &${varName})${semi || ""}`;
+    return content.padEnd(line.length, " ");
+  }).join("\n");
 }
 
 /**
@@ -989,7 +1008,9 @@ function preprocessStructMemberAccess(src: string): string {
     if (/^\s*#/.test(line)) return line;
     return line.replace(/\b([A-Za-z_]\w*)\s*\.\s*([A-Za-z_]\w*)(?!\s*\()/g, (match, obj) => {
       if (obj === "Serial") return match;
-      return "0" + " ".repeat(match.length - 1);
+      // Retorna o próprio objeto (ex.: temperatura.temperature → temperatura)
+      // para que variáveis de sensor declaradas como float sejam usadas corretamente.
+      return obj + " ".repeat(match.length - obj.length);
     });
   }).join("\n");
 }
@@ -1084,7 +1105,8 @@ export class CInterpreter {
       const afterTypeDecls = preprocessLibraryTypeDeclarations(source);
       const { source: afterSerial, beginLines } = preprocessArduinoSerial(afterTypeDecls);
       this.serialBeginLines = beginLines;
-      const afterMethods = preprocessLibraryMethodCalls(afterSerial);
+      const afterGetEvent = preprocessGetEvent(afterSerial);
+      const afterMethods = preprocessLibraryMethodCalls(afterGetEvent);
       const preprocessed = preprocessStructMemberAccess(afterMethods);
 
       // Verificação de balanceamento de chaves '{' e '}' antes do parsing.
