@@ -984,11 +984,14 @@ function preprocessLibraryMethodCalls(src: string): string {
  * Roda após preprocessLibraryMethodCalls para não conflitar com chamadas de método.
  */
 function preprocessStructMemberAccess(src: string): string {
-  // Substitui identifier.identifier que NÃO é seguido de '(' (campo, não método)
-  return src.replace(/\b([A-Za-z_]\w*)\s*\.\s*([A-Za-z_]\w*)(?!\s*\()/g, (match, obj) => {
-    if (obj === "Serial") return match;
-    return "0" + " ".repeat(match.length - 1);
-  });
+  // Processa linha a linha para não tocar em diretivas #include (ex.: DHT_U.h)
+  return src.split("\n").map(line => {
+    if (/^\s*#/.test(line)) return line;
+    return line.replace(/\b([A-Za-z_]\w*)\s*\.\s*([A-Za-z_]\w*)(?!\s*\()/g, (match, obj) => {
+      if (obj === "Serial") return match;
+      return "0" + " ".repeat(match.length - 1);
+    });
+  }).join("\n");
 }
 
 /**
