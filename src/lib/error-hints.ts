@@ -113,7 +113,7 @@ const RULES: HintRule[] = [
   {
     test: /scanf/i,
     hint: () =>
-      `Em Arduino normalmente não se usa scanf. Para ler entradas, use digitalRead(pino) (0 ou 1) ou analogRead(pino) (0 a 1023).`,
+      `Verifique a sintaxe do scanf: 'scanf("%d", &variavel);' — o '&' antes do nome da variável é obrigatório. Em Arduino, prefira digitalRead(pino) ou analogRead(pino) para ler entradas de pinos.`,
   },
   {
     test: /printf/i,

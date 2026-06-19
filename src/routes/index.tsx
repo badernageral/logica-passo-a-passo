@@ -21,7 +21,7 @@ export const Route = createFileRoute("/")({
   component: Index,
 });
 
-const SAMPLE = `int porta_led = 2;
+const SAMPLE_ARDUINO = `int porta_led = 2;
 int porta_botao = 3;
 int estado_led = 0;
 int vb, vab;
@@ -42,8 +42,25 @@ void loop() {
 \tvab = vb;
 }`;
 
+const SAMPLE_C = `#include <stdio.h>
+
+int dobro(int n) {
+\tint resultado = n * 2;
+\treturn resultado;
+}
+
+int main() {
+\tint i, r;
+\tfor (i = 1; i <= 5; i++) {
+\t\tr = dobro(i);
+\t\tprintf("%d x 2 = %d\\n", i, r);
+\t}
+\treturn 0;
+}`;
+
 function Index() {
-  const [code, setCode] = useState(SAMPLE);
+  const [sampleType, setSampleType] = useState<"arduino" | "c">("arduino");
+  const [code, setCode] = useState(SAMPLE_ARDUINO);
   const [msPerLoop, setMsPerLoop] = useState(100);
   const [interp, setInterp] = useState<CInterpreter | null>(null);
   const [, setTick] = useState(0);
@@ -225,6 +242,24 @@ function Index() {
           </label>
           {!interp ? (
             <>
+              <div className="flex gap-1 rounded-md border border-border p-0.5">
+                <Button
+                  size="sm"
+                  variant={sampleType === "arduino" ? "default" : "ghost"}
+                  className="chalk-text h-7 px-3 text-xs"
+                  onClick={() => { setSampleType("arduino"); setCode(SAMPLE_ARDUINO); }}
+                >
+                  Arduino
+                </Button>
+                <Button
+                  size="sm"
+                  variant={sampleType === "c" ? "default" : "ghost"}
+                  className="chalk-text h-7 px-3 text-xs"
+                  onClick={() => { setSampleType("c"); setCode(SAMPLE_C); }}
+                >
+                  C puro
+                </Button>
+              </div>
               <Button onClick={start} size="lg" className="chalk-text text-base">
                 <Play className="mr-2 h-4 w-4" /> Iniciar execução
               </Button>
