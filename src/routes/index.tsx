@@ -209,28 +209,32 @@ function Index() {
       <header className="mb-2 w-full">
         <div className="flex flex-wrap items-center justify-end gap-3">
           <ThemeSwitcher />
-          <Button
-            onClick={() => setShowPinPanel((v) => !v)}
-            size="sm"
-            variant={showPinPanel ? "default" : "outline"}
-            className="chalk-text"
-            title="Mostrar/ocultar entradas pré-configuradas de pinos"
-          >
-            <Cable className="mr-2 h-4 w-4" />
-            Entradas de pinos
-          </Button>
-          <label className="chalk-text flex items-center gap-2 text-sm text-muted-foreground">
-            ms/loop
-            <input
-              type="number"
-              min={0}
-              step={10}
-              value={msPerLoop}
-              onChange={(e) => setMsPerLoop(Math.max(0, parseInt(e.target.value) || 0))}
-              className="w-24 rounded-md border border-border bg-card/40 px-2 py-1 font-mono text-base text-foreground outline-none focus:border-primary"
-              style={{ fontFamily: "var(--font-mono)" }}
-            />
-          </label>
+          {sampleType === "arduino" && (
+            <>
+              <Button
+                onClick={() => setShowPinPanel((v) => !v)}
+                size="sm"
+                variant={showPinPanel ? "default" : "outline"}
+                className="chalk-text"
+                title="Mostrar/ocultar entradas pré-configuradas de pinos"
+              >
+                <Cable className="mr-2 h-4 w-4" />
+                Entradas de pinos
+              </Button>
+              <label className="chalk-text flex items-center gap-2 text-sm text-muted-foreground">
+                ms/loop
+                <input
+                  type="number"
+                  min={0}
+                  step={10}
+                  value={msPerLoop}
+                  onChange={(e) => setMsPerLoop(Math.max(0, parseInt(e.target.value) || 0))}
+                  className="w-24 rounded-md border border-border bg-card/40 px-2 py-1 font-mono text-base text-foreground outline-none focus:border-primary"
+                  style={{ fontFamily: "var(--font-mono)" }}
+                />
+              </label>
+            </>
+          )}
           {!interp ? (
             <>
               <div className="flex gap-1 rounded-md border border-border p-0.5">
@@ -248,7 +252,7 @@ function Index() {
                   className="chalk-text h-7 px-3 text-xs"
                   onClick={() => { setSampleType("c"); setCode(SAMPLE_C); }}
                 >
-                  C puro
+                  Linguagem C
                 </Button>
               </div>
               <Button onClick={start} size="lg" className="chalk-text text-base">
