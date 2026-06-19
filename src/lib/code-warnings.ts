@@ -199,10 +199,7 @@ export function analyzeCode(code: string, mode: "arduino" | "c" = "arduino"): Co
   }
 
   // 7) Variáveis usadas sem declaração prévia
-  // Desabilitado quando há #include: não conhecemos os tipos/constantes das bibliotecas externas.
-  if (!/#include\s/.test(code)) {
-    warnings.push(...findUndeclaredUsages(cleaned));
-  }
+  warnings.push(...findUndeclaredUsages(cleaned));
 
   // Limita a quantidade exibida para não poluir
   return warnings.slice(0, 8);
@@ -301,6 +298,28 @@ function findUndeclaredUsages(cleaned: string): CodeWarning[] {
   );
   while ((m = forRe.exec(cleaned)) !== null) declared.add(m[1]);
 
+  // Declarações com tipos externos (structs/classes de bibliotecas não em TYPE_KW).
+  // Ex.: "DHT_Unified dht(8, DHT11);" e "sensors_event_t temperatura;"
+  // → adiciona o tipo e o identificador declarado a conjuntos conhecidos.
+  const userTypes = new Set<string>();
+  const extTypeDeclRe = /^\s*([A-Za-z_]\w*)\s+([A-Za-z_]\w*)\s*(?:;|\(([^)]*)\)\s*;)/gm;
+  let etm: RegExpExecArray | null;
+  while ((etm = extTypeDeclRe.exec(cleaned)) !== null) {
+    const typeName = etm[1];
+    const varName = etm[2];
+    if (RESERVED.has(typeName)) continue;
+    if (new RegExp(`^(?:${TYPE_KW})$`).test(typeName)) continue;
+    userTypes.add(typeName);
+    declared.add(varName);
+    // Identificadores simples nos argumentos do construtor (ex.: DHT11)
+    if (etm[3]) {
+      for (const arg of etm[3].split(",")) {
+        const am = arg.trim().match(/^([A-Za-z_]\w*)$/);
+        if (am && !RESERVED.has(am[1])) userTypes.add(am[1]);
+      }
+    }
+  }
+
   // Coleta usos: identificadores que NÃO são precedidos por '.', '->' ou tipo,
   // e não aparecem como label (name:)
   const reported = new Set<string>();
@@ -310,7 +329,7 @@ function findUndeclaredUsages(cleaned: string): CodeWarning[] {
     let im: RegExpExecArray | null;
     while ((im = idRe.exec(ln)) !== null) {
       const name = im[1];
-      if (RESERVED.has(name) || declared.has(name) || reported.has(name)) continue;
+      if (RESERVED.has(name) || declared.has(name) || reported.has(name) || userTypes.has(name)) continue;
       // pular números puros (regex já exclui)
       const start = im.index;
       const before = ln.slice(0, start);
