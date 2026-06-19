@@ -748,6 +748,67 @@ const ARDUINO_BUILTINS = new Set([
 ]);
 
 /**
+ * Remove declarações com tipos de biblioteca desconhecidos, antes de qualquer
+ * outro pré-processador.  Exemplos:
+ *   DHT_Unified dht(8, DHT11);    → apagado (substituído por espaços)
+ *   sensors_event_t temperatura;  → apagado
+ * Tipos e palavras-chave C/Arduino conhecidos são ignorados.
+ */
+function preprocessLibraryTypeDeclarations(src: string): string {
+  const KNOWN_TYPES = new Set([
+    "int","float","double","char","void","long","short",
+    "unsigned","signed","bool","byte","boolean","String",
+  ]);
+  const C_KEYWORDS = new Set([
+    "if","else","for","while","do","switch","case","default",
+    "break","continue","return","struct","typedef","enum",
+    "union","const","static","extern","volatile","sizeof",
+    "printf","scanf","Serial","pinMode","digitalWrite","digitalRead",
+    "analogRead","analogWrite","delay","millis","micros","map",
+    "setup","loop","main",
+  ]);
+  const findMatchingParen = (s: string, openIdx: number): number => {
+    let depth = 0;
+    for (let i = openIdx; i < s.length; i++) {
+      const c = s[i];
+      if (c === '"' || c === "'") {
+        const q = c; i++;
+        while (i < s.length && s[i] !== q) { if (s[i] === "\\") i++; i++; }
+        continue;
+      }
+      if (c === "(") depth++;
+      else if (c === ")") { depth--; if (depth === 0) return i; }
+    }
+    return -1;
+  };
+  // Padrão: início de linha, espaços opcionais, Tipo Variavel; ou Tipo Variavel(args);
+  const re = /^([ \t]*)([A-Za-z_]\w*)([ \t]+)([A-Za-z_]\w*)([ \t]*)([;(])/gm;
+  let out = src;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(out)) !== null) {
+    const typeName = match[2];
+    if (KNOWN_TYPES.has(typeName) || C_KEYWORDS.has(typeName)) continue;
+    const startIdx = match.index;
+    let endIdx: number;
+    if (match[6] === ";") {
+      endIdx = match.index + match[0].length;
+    } else {
+      const openParen = match.index + match[0].length - 1;
+      const closeParen = findMatchingParen(out, openParen);
+      if (closeParen < 0) continue;
+      endIdx = closeParen + 1;
+      while (endIdx < out.length && out[endIdx] === " ") endIdx++;
+      if (endIdx < out.length && out[endIdx] === ";") endIdx++;
+    }
+    const original = out.slice(startIdx, endIdx);
+    const replacement = original.replace(/[^\n]/g, " ");
+    out = out.slice(0, startIdx) + replacement + out.slice(endIdx);
+    re.lastIndex = startIdx + replacement.length;
+  }
+  return out;
+}
+
+/**
  * Reescreve chamadas Arduino do tipo Serial.* para equivalentes que o
  * interpretador entende, preservando a numeração de linhas (não inserimos
  * nem removemos quebras de linha).
@@ -997,7 +1058,8 @@ export class CInterpreter {
     };
     try {
       const directives: Directive[] = [];
-      const { source: afterSerial, beginLines } = preprocessArduinoSerial(source);
+      const afterTypeDecls = preprocessLibraryTypeDeclarations(source);
+      const { source: afterSerial, beginLines } = preprocessArduinoSerial(afterTypeDecls);
       this.serialBeginLines = beginLines;
       const afterMethods = preprocessLibraryMethodCalls(afterSerial);
       const preprocessed = preprocessStructMemberAccess(afterMethods);
