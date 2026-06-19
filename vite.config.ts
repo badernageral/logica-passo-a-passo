@@ -18,7 +18,7 @@ export default defineConfig({
     },
     dedupe: ["react", "react-dom", "@tanstack/react-router"],
   },
-  base: "/arduino-step-by-step/",
+  base: "/logica-passo-a-passo/",
   build: {
     outDir: "dist",
   },
