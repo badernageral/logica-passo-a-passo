@@ -199,7 +199,10 @@ export function analyzeCode(code: string, mode: "arduino" | "c" = "arduino"): Co
   }
 
   // 7) Variáveis usadas sem declaração prévia
-  warnings.push(...findUndeclaredUsages(cleaned));
+  // Desabilitado quando há #include: não conhecemos os tipos/constantes das bibliotecas externas.
+  if (!/#include\s/.test(code)) {
+    warnings.push(...findUndeclaredUsages(cleaned));
+  }
 
   // Limita a quantidade exibida para não poluir
   return warnings.slice(0, 8);
