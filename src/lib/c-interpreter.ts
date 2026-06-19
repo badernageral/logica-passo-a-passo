@@ -748,11 +748,14 @@ const ARDUINO_BUILTINS = new Set([
 ]);
 
 /**
- * Remove declarações com tipos de biblioteca desconhecidos, antes de qualquer
- * outro pré-processador.  Exemplos:
- *   DHT_Unified dht(8, DHT11);    → apagado (substituído por espaços)
- *   sensors_event_t temperatura;  → apagado
- * Tipos e palavras-chave C/Arduino conhecidos são ignorados.
+ * Transforma declarações com tipos de biblioteca desconhecidos antes do parser.
+ *
+ * - Construtor com primeiro argumento numérico (pin):
+ *     DHT_Unified dht(8, DHT11);  →  pinMode(8, INPUT);   (cria card do pino)
+ * - Qualquer outro (struct sem pino, etc.):
+ *     sensors_event_t temperatura;  →  apagado (espaços)
+ *
+ * Preserva comprimento da linha para manter numeração de linhas intacta.
  */
 function preprocessLibraryTypeDeclarations(src: string): string {
   const KNOWN_TYPES = new Set([
@@ -781,7 +784,9 @@ function preprocessLibraryTypeDeclarations(src: string): string {
     }
     return -1;
   };
-  // Padrão: início de linha, espaços opcionais, Tipo Variavel; ou Tipo Variavel(args);
+  const pad = (content: string, targetLen: number, nls: number) =>
+    content + " ".repeat(Math.max(0, targetLen - content.length - nls)) + "\n".repeat(nls);
+
   const re = /^([ \t]*)([A-Za-z_]\w*)([ \t]+)([A-Za-z_]\w*)([ \t]*)([;(])/gm;
   let out = src;
   let match: RegExpExecArray | null;
@@ -790,18 +795,33 @@ function preprocessLibraryTypeDeclarations(src: string): string {
     if (KNOWN_TYPES.has(typeName) || C_KEYWORDS.has(typeName)) continue;
     const startIdx = match.index;
     let endIdx: number;
+    let firstArg = "";
+
     if (match[6] === ";") {
       endIdx = match.index + match[0].length;
     } else {
       const openParen = match.index + match[0].length - 1;
       const closeParen = findMatchingParen(out, openParen);
       if (closeParen < 0) continue;
+      const args = out.slice(openParen + 1, closeParen);
+      firstArg = args.split(",")[0].trim();
       endIdx = closeParen + 1;
       while (endIdx < out.length && out[endIdx] === " ") endIdx++;
       if (endIdx < out.length && out[endIdx] === ";") endIdx++;
     }
+
     const original = out.slice(startIdx, endIdx);
-    const replacement = original.replace(/[^\n]/g, " ");
+    const nls = (original.match(/\n/g) || []).length;
+    let replacement: string;
+
+    if (/^\d+$/.test(firstArg)) {
+      // Construtor com número de pino → cria card via pinMode
+      const content = `${match[1]}pinMode(${firstArg}, INPUT);`;
+      replacement = pad(content, original.length, nls);
+    } else {
+      replacement = original.replace(/[^\n]/g, " ");
+    }
+
     out = out.slice(0, startIdx) + replacement + out.slice(endIdx);
     re.lastIndex = startIdx + replacement.length;
   }
