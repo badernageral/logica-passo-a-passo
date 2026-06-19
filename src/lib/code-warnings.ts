@@ -22,7 +22,7 @@ function stripStrings(src: string): string {
   );
 }
 
-export function analyzeCode(code: string): CodeWarning[] {
+export function analyzeCode(code: string, mode: "arduino" | "c" = "arduino"): CodeWarning[] {
   const warnings: CodeWarning[] = [];
   const cleaned = stripStrings(stripComments(code));
   const lines = cleaned.split("\n");
@@ -174,23 +174,25 @@ export function analyzeCode(code: string): CodeWarning[] {
   });
 
   // 6) Arduino: setup/loop ausentes (apenas se já existe pelo menos uma função)
-  const hasAnyFn = /\b\w+\s+\w+\s*\([^)]*\)\s*\{/.test(cleaned);
-  if (hasAnyFn) {
-    if (!/\bvoid\s+setup\s*\(\s*\)/.test(cleaned)) {
-      warnings.push({
-        line: 1,
-        severity: "info",
-        message:
-          "Sketch Arduino normalmente tem 'void setup()' (executa uma vez ao ligar). Se for um programa C puro com main(), pode ignorar.",
-      });
-    }
-    if (!/\bvoid\s+loop\s*\(\s*\)/.test(cleaned)) {
-      warnings.push({
-        line: 1,
-        severity: "info",
-        message:
-          "Sketch Arduino normalmente tem 'void loop()' (repete continuamente). Se for um programa C puro com main(), pode ignorar.",
-      });
+  if (mode === "arduino") {
+    const hasAnyFn = /\b\w+\s+\w+\s*\([^)]*\)\s*\{/.test(cleaned);
+    if (hasAnyFn) {
+      if (!/\bvoid\s+setup\s*\(\s*\)/.test(cleaned)) {
+        warnings.push({
+          line: 1,
+          severity: "info",
+          message:
+            "Sketch Arduino normalmente tem 'void setup()' (executa uma vez ao ligar).",
+        });
+      }
+      if (!/\bvoid\s+loop\s*\(\s*\)/.test(cleaned)) {
+        warnings.push({
+          line: 1,
+          severity: "info",
+          message:
+            "Sketch Arduino normalmente tem 'void loop()' (repete continuamente).",
+        });
+      }
     }
   }
 

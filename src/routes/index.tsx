@@ -200,8 +200,8 @@ function Index() {
   // Avisos pedagógicos: análise estática enquanto o aluno digita.
   // Não roda durante a execução (a linha atual já tem feedback próprio).
   const warnings = useMemo(
-    () => (interp ? [] : analyzeCode(code)),
-    [code, interp],
+    () => (interp ? [] : analyzeCode(code, sampleType)),
+    [code, interp, sampleType],
   );
 
   return (
