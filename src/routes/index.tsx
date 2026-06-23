@@ -7,10 +7,16 @@ import { PinCard } from "@/components/PinCard";
 import { ConsolePanel } from "@/components/ConsolePanel";
 import { InputDialog } from "@/components/InputDialog";
 import { Button } from "@/components/ui/button";
-import { Play, Square, StepForward, Timer, Cable } from "lucide-react";
+import { Play, Square, StepForward, StepBack, Timer, Cable, RotateCcw } from "lucide-react";
 import { getErrorHint } from "@/lib/error-hints";
 import { ZoomControls } from "@/components/ZoomControls";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@/components/ui/resizable";
 import { ThemeSwitcher } from "@/components/ThemeSwitcher";
@@ -66,8 +72,14 @@ function Index() {
   const [autoDelayInput, setAutoDelayInput] = useState("500");
   const autoTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Histórico de ações para permitir "voltar um passo" (replay determinístico).
+  // O interpretador é incremental e não tem undo; recriamos do zero e
+  // reexecutamos as ações registradas até a posição anterior.
+  const actionLog = useRef<({ t: "step" } | { t: "input"; v: string })[]>([]);
+
   const start = useCallback(() => {
     const i = new CInterpreter(code, msPerLoop);
+    actionLog.current = [];
     setInterp(i);
     refresh();
   }, [code, msPerLoop]);
@@ -87,23 +99,36 @@ function Index() {
   const step = useCallback(() => {
     if (!interp) return;
     interp.step();
+    actionLog.current.push({ t: "step" });
     refresh();
   }, [interp]);
 
-  const runAll = useCallback(() => {
+  const provideInput = useCallback(
+    (v: string) => {
+      if (!interp) return;
+      interp.provideInput(v);
+      actionLog.current.push({ t: "input", v });
+      refresh();
+    },
+    [interp],
+  );
+
+  // Volta uma ação: recria o interpretador e reexecuta o log sem a última ação.
+  const stepBack = useCallback(() => {
     if (!interp) return;
-    let guard = 0;
-    while (!interp.state.finished && !interp.state.awaitingInput && !interp.state.error && guard++ < 5000) {
-      interp.step();
+    const log = actionLog.current.slice(0, -1);
+    if (log.length === actionLog.current.length) return; // nada a desfazer
+    setAutoRunning(false);
+    if (autoTimerRef.current) clearTimeout(autoTimerRef.current);
+    const i = new CInterpreter(code, msPerLoop);
+    for (const a of log) {
+      if (a.t === "step") i.step();
+      else i.provideInput(a.v);
     }
+    actionLog.current = log;
+    setInterp(i);
     refresh();
-  }, [interp]);
-
-  const provideInput = useCallback((v: string) => {
-    if (!interp) return;
-    interp.provideInput(v);
-    refresh();
-  }, [interp]);
+  }, [interp, code, msPerLoop]);
 
   // Painel de entradas pré-configuradas para digitalRead/analogRead.
   const [pinInputs, setPinInputs] = useState<Record<number, PinInputConfig>>({});
@@ -120,6 +145,7 @@ function Index() {
     const expectedMode = ai.pinRead.fn === "digitalRead" ? "digital" : "analog";
     if (cfg.mode !== expectedMode) return;
     interp.provideInput(String(cfg.value));
+    actionLog.current.push({ t: "input", v: String(cfg.value) });
     refresh();
   });
 
@@ -131,6 +157,7 @@ function Index() {
 
     autoTimerRef.current = setTimeout(() => {
       interp.step();
+      actionLog.current.push({ t: "step" });
       refresh();
     }, autoDelay);
 
@@ -141,6 +168,7 @@ function Index() {
 
   const startAutoRun = useCallback(() => {
     const i = new CInterpreter(code, msPerLoop);
+    actionLog.current = [];
     setInterp(i);
     setAutoRunning(true);
     refresh();
@@ -241,7 +269,10 @@ function Index() {
                   size="sm"
                   variant={sampleType === "arduino" ? "default" : "ghost"}
                   className="chalk-text h-7 px-3 text-xs"
-                  onClick={() => { setSampleType("arduino"); setCode(SAMPLE_ARDUINO); }}
+                  onClick={() => {
+                    setSampleType("arduino");
+                    setCode(SAMPLE_ARDUINO);
+                  }}
                 >
                   Arduino
                 </Button>
@@ -249,32 +280,66 @@ function Index() {
                   size="sm"
                   variant={sampleType === "c" ? "default" : "ghost"}
                   className="chalk-text h-7 px-3 text-xs"
-                  onClick={() => { setSampleType("c"); setCode(SAMPLE_C); }}
+                  onClick={() => {
+                    setSampleType("c");
+                    setCode(SAMPLE_C);
+                  }}
                 >
                   Linguagem C
                 </Button>
               </div>
+              <Button
+                onClick={() => setCode(sampleType === "arduino" ? SAMPLE_ARDUINO : SAMPLE_C)}
+                size="sm"
+                variant="ghost"
+                className="chalk-text"
+                title="Restaurar o código de exemplo deste modo"
+              >
+                <RotateCcw className="mr-2 h-4 w-4" /> Carregar exemplo
+              </Button>
               <Button onClick={start} size="lg" className="chalk-text text-base">
                 <Play className="mr-2 h-4 w-4" /> Iniciar execução
               </Button>
-              <Button onClick={() => setShowAutoPrompt(true)} size="lg" variant="secondary" className="chalk-text text-base">
+              <Button
+                onClick={() => setShowAutoPrompt(true)}
+                size="lg"
+                variant="secondary"
+                className="chalk-text text-base"
+              >
                 <Timer className="mr-2 h-4 w-4" /> Execução automática
               </Button>
             </>
           ) : (
             <>
               {!autoRunning && (
-                <Button
-                  onClick={step}
-                  disabled={state?.finished || !!state?.error || !!state?.awaitingInput}
-                  size="lg"
-                  className="chalk-text text-base"
-                >
-                  <StepForward className="mr-2 h-4 w-4" /> Próxima linha
-                </Button>
+                <>
+                  <Button
+                    onClick={stepBack}
+                    disabled={actionLog.current.length === 0}
+                    size="lg"
+                    variant="outline"
+                    className="chalk-text text-base"
+                    title="Voltar uma ação (reexecuta do início)"
+                  >
+                    <StepBack className="mr-2 h-4 w-4" /> Linha anterior
+                  </Button>
+                  <Button
+                    onClick={step}
+                    disabled={state?.finished || !!state?.error || !!state?.awaitingInput}
+                    size="lg"
+                    className="chalk-text text-base"
+                  >
+                    <StepForward className="mr-2 h-4 w-4" /> Próxima linha
+                  </Button>
+                </>
               )}
               {autoRunning && (
-                <Button onClick={stopAutoRun} size="lg" className="chalk-text text-base" variant="destructive">
+                <Button
+                  onClick={stopAutoRun}
+                  size="lg"
+                  className="chalk-text text-base"
+                  variant="destructive"
+                >
                   <StepForward className="mr-2 h-4 w-4" /> Modo manual
                 </Button>
               )}
@@ -286,7 +351,10 @@ function Index() {
           {interp && state && (
             <>
               <span className="chalk-text rounded-md border border-primary/30 bg-primary/10 px-3 py-1 text-sm text-primary">
-                ⏱ <strong className="font-mono" style={{ fontFamily: "var(--font-mono)" }}>{Math.trunc(state.simMillis)} ms</strong>
+                ⏱{" "}
+                <strong className="font-mono" style={{ fontFamily: "var(--font-mono)" }}>
+                  {Math.trunc(state.simMillis)} ms
+                </strong>
               </span>
               {state.arduinoMode && (
                 <span className="chalk-text rounded-md border border-border bg-card/40 px-3 py-1 text-sm text-muted-foreground">
@@ -310,9 +378,16 @@ function Index() {
           <ResizablePanel defaultSize={55} minSize={20}>
             <section className="chalkboard relative flex h-full flex-col p-4">
               {state?.lastEvent && (
-                <div className="chalk-text mb-2 rounded-md border border-primary/30 bg-primary/10 p-2 text-sm text-primary" style={{ zoom: codeZoom }}>
-                  Linha {state.lastEvent.line || "—"}: {state.lastEvent.message.split("\n").map((part, i) => (
-                    <span key={i} className={i > 0 ? "block mt-1 text-xs text-muted-foreground" : ""}>
+                <div
+                  className="chalk-text mb-2 rounded-md border border-primary/30 bg-primary/10 p-2 text-sm text-primary"
+                  style={{ zoom: codeZoom }}
+                >
+                  Linha {state.lastEvent.line || "—"}:{" "}
+                  {state.lastEvent.message.split("\n").map((part, i) => (
+                    <span
+                      key={i}
+                      className={i > 0 ? "block mt-1 text-xs text-muted-foreground" : ""}
+                    >
                       {part}
                     </span>
                   ))}
@@ -331,7 +406,10 @@ function Index() {
                 </div>
               )}
               {state?.finished && !state.error && (
-                <div className="chalk-text mb-2 rounded-md border border-[oklch(0.85_0.15_145)]/40 bg-[oklch(0.85_0.15_145)]/15 p-2 text-sm" style={{ color: "var(--chalk-green)", zoom: codeZoom }}>
+                <div
+                  className="chalk-text mb-2 rounded-md border border-[oklch(0.85_0.15_145)]/40 bg-[oklch(0.85_0.15_145)]/15 p-2 text-sm"
+                  style={{ color: "var(--chalk-green)", zoom: codeZoom }}
+                >
                   ✓ Execução finalizada com sucesso.
                 </div>
               )}
@@ -342,7 +420,7 @@ function Index() {
                     onChange={setCode}
                     highlightLine={state?.currentLine ?? 0}
                     highlight={state?.highlight ?? null}
-                    errorLine={state?.error ? state?.currentLine ?? null : null}
+                    errorLine={state?.error ? (state?.currentLine ?? null) : null}
                     readOnly={!!interp}
                     variables={variables}
                   />
@@ -356,7 +434,10 @@ function Index() {
             </section>
           </ResizablePanel>
 
-          <ResizableHandle withHandle className="mx-2 bg-primary/40 hover:bg-primary transition-colors" />
+          <ResizableHandle
+            withHandle
+            className="mx-2 bg-primary/40 hover:bg-primary transition-colors"
+          />
 
           {/* Coluna direita: variáveis + console (em execução) OU dicas pedagógicas (parado) */}
           <ResizablePanel defaultSize={45} minSize={20}>
@@ -368,7 +449,8 @@ function Index() {
                 <div className="flex-1 overflow-auto pr-1 space-y-2">
                   {warnings.length === 0 ? (
                     <p className="chalk-text text-muted-foreground">
-                      Nenhum aviso encontrado. Seu código parece estar bem escrito! Inicie a execução para ver as variáveis e a saída.
+                      Nenhum aviso encontrado. Seu código parece estar bem escrito! Inicie a
+                      execução para ver as variáveis e a saída.
                     </p>
                   ) : (
                     warnings.map((w, i) => (
@@ -381,100 +463,117 @@ function Index() {
                             : "border-primary/30 bg-primary/10 text-primary")
                         }
                       >
-                        {w.severity === "warning" ? "⚠" : "💡"} <strong>Linha {w.line}:</strong> {w.message}
+                        {w.severity === "warning" ? "⚠" : "💡"} <strong>Linha {w.line}:</strong>{" "}
+                        {w.message}
                       </div>
                     ))
                   )}
                 </div>
               </section>
             ) : (
-            <section className="flex h-full flex-col gap-4">
-              <div className="chalkboard relative flex flex-1 flex-col p-4 overflow-hidden">
-                <div className="pointer-events-none absolute bottom-2 left-1/2 z-30 -translate-x-1/2">
-                  <div className="pointer-events-auto rounded-full border border-border bg-card/80 px-1 py-0.5 shadow-md backdrop-blur">
-                    <ZoomControls zoom={memZoom} setZoom={setMemZoom} />
-                  </div>
-                </div>
-                <div className="flex-1 overflow-auto pr-1" style={{ zoom: memZoom }}>
-                  {variables.length === 0 && visibleReturns.length === 0 && pinStates.length === 0 ? (
-                    <p className="chalk-text text-muted-foreground">
-                      Nenhuma variável criada ainda. Inicie a execução e avance linha a linha.
-                    </p>
-                  ) : (
-                    <div className="space-y-4">
-                      {pinStates.length > 0 && (
-                        <div>
-                          <div className="chalk-text mb-2 text-sm uppercase tracking-widest text-muted-foreground">
-                            ⚡ Pinos configurados (INPUT / OUTPUT)
-                          </div>
-                          <div className="grid gap-3 grid-cols-[repeat(auto-fill,minmax(180px,1fr))]">
-                            {pinStates.map((p) => (
-                              <PinCard key={p.pin} p={p} />
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                      {grouped.map(([scope, vars]) => (
-                        <div key={scope}>
-                          <div className="chalk-text mb-2 text-sm uppercase tracking-widest text-muted-foreground">
-                            Escopo: <span className="text-primary">{scope === "global" ? "global" : scope.split("#")[0]}</span>
-                          </div>
-                          <div className="grid gap-3 grid-cols-[repeat(auto-fill,minmax(180px,1fr))]">
-                            {vars.map((v) => (
-                              <VariableCard key={`${v.scope}-${v.name}`} v={v} />
-                            ))}
-                          </div>
-                        </div>
-                      ))}
-                      {visibleReturns.length > 0 && (
-                        <div>
-                          <div className="chalk-text mb-2 text-sm uppercase tracking-widest text-muted-foreground">
-                            ↩ Retornos de funções
-                          </div>
-                          <div className="grid gap-3 grid-cols-[repeat(auto-fill,minmax(180px,1fr))]">
-                            {visibleReturns.map((r) => (
-                              <div
-                                key={r.id}
-                                className={`chalk-text rounded-md border-2 border-dashed bg-card/30 p-3 transition-all ${r.justReturned ? "animate-chalk-write" : ""}`}
-                                style={{
-                                  borderColor: "var(--chalk-green)",
-                                  boxShadow: "0 0 14px color-mix(in oklab, var(--chalk-green) 30%, transparent)",
-                                }}
-                              >
-                                <div className="flex items-baseline justify-between gap-2">
-                                  <span className="text-xs uppercase tracking-wider" style={{ color: "var(--chalk-green)" }}>
-                                    return
-                                  </span>
-                                  <span className="text-[10px] text-muted-foreground">linha {r.line}</span>
-                                </div>
-                                <div className="mt-1 text-lg font-semibold text-foreground">{r.fnName}( )</div>
-                                <div
-                                  className={`mt-1 font-mono text-3xl chalk-glow ${r.justReturned ? "animate-value-pop" : ""}`}
-                                  style={{ color: "var(--chalk-green)", fontFamily: "var(--font-mono)" }}
-                                >
-                                  → {String(r.value)}
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      )}
+              <section className="flex h-full flex-col gap-4">
+                <div className="chalkboard relative flex flex-1 flex-col p-4 overflow-hidden">
+                  <div className="pointer-events-none absolute bottom-2 left-1/2 z-30 -translate-x-1/2">
+                    <div className="pointer-events-auto rounded-full border border-border bg-card/80 px-1 py-0.5 shadow-md backdrop-blur">
+                      <ZoomControls zoom={memZoom} setZoom={setMemZoom} />
                     </div>
-                  )}
-                </div>
-              </div>
-
-              <div className="chalkboard relative flex h-[34%] flex-col p-4">
-                <div className="pointer-events-none absolute bottom-2 left-1/2 z-30 -translate-x-1/2">
-                  <div className="pointer-events-auto rounded-full border border-border bg-card/80 px-1 py-0.5 shadow-md backdrop-blur">
-                    <ZoomControls zoom={outZoom} setZoom={setOutZoom} />
+                  </div>
+                  <div className="flex-1 overflow-auto pr-1" style={{ zoom: memZoom }}>
+                    {variables.length === 0 &&
+                    visibleReturns.length === 0 &&
+                    pinStates.length === 0 ? (
+                      <p className="chalk-text text-muted-foreground">
+                        Nenhuma variável criada ainda. Inicie a execução e avance linha a linha.
+                      </p>
+                    ) : (
+                      <div className="space-y-4">
+                        {pinStates.length > 0 && (
+                          <div>
+                            <div className="chalk-text mb-2 text-sm uppercase tracking-widest text-muted-foreground">
+                              ⚡ Pinos configurados (INPUT / OUTPUT)
+                            </div>
+                            <div className="grid gap-3 grid-cols-[repeat(auto-fill,minmax(180px,1fr))]">
+                              {pinStates.map((p) => (
+                                <PinCard key={p.pin} p={p} />
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                        {grouped.map(([scope, vars]) => (
+                          <div key={scope}>
+                            <div className="chalk-text mb-2 text-sm uppercase tracking-widest text-muted-foreground">
+                              Escopo:{" "}
+                              <span className="text-primary">
+                                {scope === "global" ? "global" : scope.split("#")[0]}
+                              </span>
+                            </div>
+                            <div className="grid gap-3 grid-cols-[repeat(auto-fill,minmax(180px,1fr))]">
+                              {vars.map((v) => (
+                                <VariableCard key={`${v.scope}-${v.name}`} v={v} />
+                              ))}
+                            </div>
+                          </div>
+                        ))}
+                        {visibleReturns.length > 0 && (
+                          <div>
+                            <div className="chalk-text mb-2 text-sm uppercase tracking-widest text-muted-foreground">
+                              ↩ Retornos de funções
+                            </div>
+                            <div className="grid gap-3 grid-cols-[repeat(auto-fill,minmax(180px,1fr))]">
+                              {visibleReturns.map((r) => (
+                                <div
+                                  key={r.id}
+                                  className={`chalk-text rounded-md border-2 border-dashed bg-card/30 p-3 transition-all ${r.justReturned ? "animate-chalk-write" : ""}`}
+                                  style={{
+                                    borderColor: "var(--chalk-green)",
+                                    boxShadow:
+                                      "0 0 14px color-mix(in oklab, var(--chalk-green) 30%, transparent)",
+                                  }}
+                                >
+                                  <div className="flex items-baseline justify-between gap-2">
+                                    <span
+                                      className="text-xs uppercase tracking-wider"
+                                      style={{ color: "var(--chalk-green)" }}
+                                    >
+                                      return
+                                    </span>
+                                    <span className="text-[10px] text-muted-foreground">
+                                      linha {r.line}
+                                    </span>
+                                  </div>
+                                  <div className="mt-1 text-lg font-semibold text-foreground">
+                                    {r.fnName}( )
+                                  </div>
+                                  <div
+                                    className={`mt-1 font-mono text-3xl chalk-glow ${r.justReturned ? "animate-value-pop" : ""}`}
+                                    style={{
+                                      color: "var(--chalk-green)",
+                                      fontFamily: "var(--font-mono)",
+                                    }}
+                                  >
+                                    → {String(r.value)}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 </div>
-                <div className="flex-1 overflow-hidden" style={{ zoom: outZoom }}>
-                  <ConsolePanel lines={state?.output ?? []} />
+
+                <div className="chalkboard relative flex h-[34%] flex-col p-4">
+                  <div className="pointer-events-none absolute bottom-2 left-1/2 z-30 -translate-x-1/2">
+                    <div className="pointer-events-auto rounded-full border border-border bg-card/80 px-1 py-0.5 shadow-md backdrop-blur">
+                      <ZoomControls zoom={outZoom} setZoom={setOutZoom} />
+                    </div>
+                  </div>
+                  <div className="flex-1 overflow-hidden" style={{ zoom: outZoom }}>
+                    <ConsolePanel lines={state?.output ?? []} />
+                  </div>
                 </div>
-              </div>
-            </section>
+              </section>
             )}
           </ResizablePanel>
         </ResizablePanelGroup>
@@ -491,15 +590,20 @@ function Index() {
       <Dialog open={showAutoPrompt} onOpenChange={setShowAutoPrompt}>
         <DialogContent className="bg-card chalk-text">
           <DialogHeader>
-            <DialogTitle className="chalk-text text-2xl text-primary chalk-glow">⏱ Auto execução</DialogTitle>
+            <DialogTitle className="chalk-text text-2xl text-primary chalk-glow">
+              ⏱ Auto execução
+            </DialogTitle>
           </DialogHeader>
-          <form onSubmit={(e) => {
-            e.preventDefault();
-            const ms = Math.max(50, parseInt(autoDelayInput) || 500);
-            setAutoDelay(ms);
-            setShowAutoPrompt(false);
-            startAutoRun();
-          }} className="space-y-3">
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              const ms = Math.max(50, parseInt(autoDelayInput) || 500);
+              setAutoDelay(ms);
+              setShowAutoPrompt(false);
+              startAutoRun();
+            }}
+            className="space-y-3"
+          >
             <label className="chalk-text block text-sm text-muted-foreground">
               Tempo entre cada linha (em milissegundos):
             </label>
@@ -515,7 +619,9 @@ function Index() {
               placeholder="500"
             />
             <DialogFooter>
-              <Button type="button" variant="outline" onClick={() => setShowAutoPrompt(false)}>Cancelar</Button>
+              <Button type="button" variant="outline" onClick={() => setShowAutoPrompt(false)}>
+                Cancelar
+              </Button>
               <Button type="submit">Iniciar</Button>
             </DialogFooter>
           </form>
