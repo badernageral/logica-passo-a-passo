@@ -46,7 +46,6 @@ const SAMPLE_C = `#include <stdio.h>
 
 int main() {
 \tprintf("Olá, mundo!\\n");
-\treturn 0;
 }`;
 
 function Index() {
