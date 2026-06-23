@@ -7,7 +7,7 @@ import { PinCard } from "@/components/PinCard";
 import { ConsolePanel } from "@/components/ConsolePanel";
 import { InputDialog } from "@/components/InputDialog";
 import { Button } from "@/components/ui/button";
-import { Play, Square, StepForward, StepBack, Timer, Cable, RotateCcw } from "lucide-react";
+import { Play, Square, StepForward, StepBack, Timer, Cable } from "lucide-react";
 import { getErrorHint } from "@/lib/error-hints";
 import { ZoomControls } from "@/components/ZoomControls";
 import {
@@ -288,15 +288,6 @@ function Index() {
                   Linguagem C
                 </Button>
               </div>
-              <Button
-                onClick={() => setCode(sampleType === "arduino" ? SAMPLE_ARDUINO : SAMPLE_C)}
-                size="sm"
-                variant="ghost"
-                className="chalk-text"
-                title="Restaurar o código de exemplo deste modo"
-              >
-                <RotateCcw className="mr-2 h-4 w-4" /> Carregar exemplo
-              </Button>
               <Button onClick={start} size="lg" className="chalk-text text-base">
                 <Play className="mr-2 h-4 w-4" /> Iniciar execução
               </Button>
