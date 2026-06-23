@@ -10,8 +10,14 @@ const SHORTCUTS: { keys: string; desc: string }[] = [
   { keys: "Shift + Tab", desc: "Remove uma tabulação à esquerda" },
   { keys: "Tab (com seleção)", desc: "Indenta todas as linhas selecionadas" },
   { keys: "Shift + Tab (com seleção)", desc: "Desindenta todas as linhas selecionadas" },
-  { keys: "Ctrl + ← / →", desc: "Seleciona a palavra sob o cursor; pressionando novamente, seleciona a próxima ocorrência igual" },
-  { keys: "Ctrl + D", desc: "Renomeia todas as ocorrências da palavra selecionada (substitui em massa)" },
+  {
+    keys: "Ctrl + ← / →",
+    desc: "Seleciona a palavra sob o cursor; pressionando novamente, seleciona a próxima ocorrência igual",
+  },
+  {
+    keys: "Ctrl + D",
+    desc: "Renomeia todas as ocorrências da palavra selecionada (substitui em massa)",
+  },
   { keys: "Ctrl + L", desc: "Seleciona a linha atual" },
   { keys: "Ctrl + Shift + K", desc: "Apaga a linha atual" },
   { keys: "Ctrl + ↓", desc: "Duplica a linha (ou seleção) para baixo" },
@@ -19,8 +25,14 @@ const SHORTCUTS: { keys: string; desc: string }[] = [
   { keys: "Ctrl + /", desc: "Comenta / descomenta as linhas selecionadas" },
   { keys: "Ctrl + Enter", desc: "Insere uma nova linha abaixo, mantendo a indentação" },
   { keys: "Ctrl + Shift + Enter", desc: "Insere uma nova linha acima, mantendo a indentação" },
-  { keys: "Home", desc: "Vai ao primeiro caractere não-branco da linha; pressionando novamente, vai ao início" },
-  { keys: "Botão direito → Auto tabular", desc: "Re-indenta automaticamente o código selecionado (ou tudo)" },
+  {
+    keys: "Home",
+    desc: "Vai ao primeiro caractere não-branco da linha; pressionando novamente, vai ao início",
+  },
+  {
+    keys: "Botão direito → Auto tabular",
+    desc: "Re-indenta automaticamente o código selecionado (ou tudo)",
+  },
 ];
 
 export function ShortcutsDialog({ open, onOpenChange }: Props) {

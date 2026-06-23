@@ -89,6 +89,16 @@ function isBreakSignal(e: unknown): e is { __break: true } {
   return typeof e === "object" && e !== null && "__break" in e;
 }
 
+/** Sinal interno lançado por 'return' e capturado pela chamada de função síncrona. */
+function isReturnSignal(e: unknown): e is { __return: number | string } {
+  return typeof e === "object" && e !== null && "__return" in e;
+}
+
+/** Extrai a mensagem de um erro desconhecido capturado em catch. */
+function errorMessage(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
+}
+
 /** Extrai o número da linha de uma mensagem de erro do parser/interpretador. */
 function extractLineFromError(msg: string): number | null {
   if (!msg) return null;
@@ -292,10 +302,10 @@ export class CInterpreter {
 
       // Empilhar intro na ordem correta.
       this.stack = [...this.stack, ...intro.reverse()];
-    } catch (e: any) {
-      this.state.error = e.message;
+    } catch (e) {
+      this.state.error = errorMessage(e);
       this.state.finished = true;
-      const ln = extractLineFromError(e.message);
+      const ln = extractLineFromError(this.state.error);
       if (ln) {
         this.state.currentLine = ln;
         this.state.highlight = null;
@@ -497,9 +507,9 @@ export class CInterpreter {
         if (v) {
           try {
             const idxs = e.indices.map((ix) => Math.trunc(Number(this.evalExpr(ix, scope))));
-            let val: any = v.value;
-            for (const i of idxs) val = (val as any[])[i];
-            out.push(`${e.name}[${idxs.join("][")}] = ${val}`);
+            let val: unknown = v.value;
+            for (const i of idxs) val = (val as unknown[])[i];
+            out.push(`${e.name}[${idxs.join("][")}] = ${val as number | string}`);
           } catch {
             /* ignore */
           }
@@ -578,7 +588,7 @@ export class CInterpreter {
         const b = this.evalExpr(e.b, scope) as number;
         switch (e.op) {
           case "+":
-            return (a as any) + (b as any);
+            return a + b;
           case "-":
             return a - b;
           case "*":
@@ -725,8 +735,8 @@ export class CInterpreter {
     let result: number | string = 0;
     try {
       this.runBlockSync(fn.body, scope);
-    } catch (e: any) {
-      if (e && e.__return !== undefined) result = e.__return;
+    } catch (e) {
+      if (isReturnSignal(e)) result = e.__return;
       else throw e;
     }
     // remover vars do escopo
@@ -915,8 +925,8 @@ export class CInterpreter {
     let event: StepEvent;
     try {
       event = this.execNext();
-    } catch (e: any) {
-      this.state.error = e.message || String(e);
+    } catch (e) {
+      this.state.error = errorMessage(e);
       this.state.finished = true;
       event = { kind: "error", line: this.state.currentLine, message: this.state.error! };
       const ln = extractLineFromError(this.state.error!);
@@ -1506,8 +1516,8 @@ export class CInterpreter {
         v.value = this.coerce(type, val);
         v.justChanged = true;
       }
-    } catch (e: any) {
-      this.state.error = e.message;
+    } catch (e) {
+      this.state.error = errorMessage(e);
       this.state.awaitingInput = null;
       this.state.finished = true;
       return { kind: "error", line: this.state.currentLine, message: this.state.error! };

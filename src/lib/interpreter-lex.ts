@@ -645,7 +645,7 @@ export class Parser {
       return { body, endLine: close.line };
     }
     const s = this.parseStmt();
-    return { body: [s], endLine: (s as any).endLine ?? s.line };
+    return { body: [s], endLine: (s as { endLine?: number }).endLine ?? s.line };
   }
 
   // expressões com precedência

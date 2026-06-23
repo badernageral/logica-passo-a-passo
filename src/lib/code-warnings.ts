@@ -17,9 +17,7 @@ function stripComments(src: string): string {
 }
 
 function stripStrings(src: string): string {
-  return src.replace(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g, (m) =>
-    m.replace(/[^\n]/g, " "),
-  );
+  return src.replace(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g, (m) => m.replace(/[^\n]/g, " "));
 }
 
 export function analyzeCode(code: string, mode: "arduino" | "c" = "arduino"): CodeWarning[] {
@@ -29,9 +27,7 @@ export function analyzeCode(code: string, mode: "arduino" | "c" = "arduino"): Co
   const rawLines = code.split("\n");
 
   // 0) Declaração com valor mas sem '=' . Ex.: int x 0;
-  const declAssignRe = new RegExp(
-    `^\\s*(?:${TYPE_KW})\\s+([A-Za-z_]\\w*)\\s+([^=;{}\\s][^;{}]*);`,
-  );
+  const declAssignRe = new RegExp(`^\\s*(?:${TYPE_KW})\\s+([A-Za-z_]\\w*)\\s+([^=;{}\\s][^;{}]*);`);
   lines.forEach((ln, i) => {
     const m = ln.match(declAssignRe);
     if (!m) return;
@@ -183,16 +179,14 @@ export function analyzeCode(code: string, mode: "arduino" | "c" = "arduino"): Co
         warnings.push({
           line: 1,
           severity: "info",
-          message:
-            "Sketch Arduino normalmente tem 'void setup()' (executa uma vez ao ligar).",
+          message: "Sketch Arduino normalmente tem 'void setup()' (executa uma vez ao ligar).",
         });
       }
       if (!/\bvoid\s+loop\s*\(\s*\)/.test(cleaned)) {
         warnings.push({
           line: 1,
           severity: "info",
-          message:
-            "Sketch Arduino normalmente tem 'void loop()' (repete continuamente).",
+          message: "Sketch Arduino normalmente tem 'void loop()' (repete continuamente).",
         });
       }
     }
@@ -206,34 +200,140 @@ export function analyzeCode(code: string, mode: "arduino" | "c" = "arduino"): Co
 }
 
 // ── Análise de identificadores não declarados ─────────────────
-const TYPE_KW =
-  "int|float|double|char|void|long|short|unsigned|signed|bool|byte|boolean|String";
+const TYPE_KW = "int|float|double|char|void|long|short|unsigned|signed|bool|byte|boolean|String";
 
 const RESERVED = new Set<string>([
   // tipos
-  "int","float","double","char","void","long","short","unsigned","signed",
-  "bool","byte","boolean","String",
+  "int",
+  "float",
+  "double",
+  "char",
+  "void",
+  "long",
+  "short",
+  "unsigned",
+  "signed",
+  "bool",
+  "byte",
+  "boolean",
+  "String",
   // palavras-chave C
-  "if","else","for","while","do","switch","case","default","break","continue",
-  "return","struct","typedef","enum","union","const","static","extern",
-  "volatile","register","sizeof","goto","inline","true","false","NULL",
+  "if",
+  "else",
+  "for",
+  "while",
+  "do",
+  "switch",
+  "case",
+  "default",
+  "break",
+  "continue",
+  "return",
+  "struct",
+  "typedef",
+  "enum",
+  "union",
+  "const",
+  "static",
+  "extern",
+  "volatile",
+  "register",
+  "sizeof",
+  "goto",
+  "inline",
+  "true",
+  "false",
+  "NULL",
   // Arduino / constantes
-  "HIGH","LOW","INPUT","OUTPUT","INPUT_PULLUP","LED_BUILTIN","A0","A1","A2",
-  "A3","A4","A5","A6","A7",
+  "HIGH",
+  "LOW",
+  "INPUT",
+  "OUTPUT",
+  "INPUT_PULLUP",
+  "LED_BUILTIN",
+  "A0",
+  "A1",
+  "A2",
+  "A3",
+  "A4",
+  "A5",
+  "A6",
+  "A7",
   // funções built-in suportadas
-  "pinMode","digitalWrite","digitalRead","analogRead","analogWrite",
-  "delay","delayMicroseconds","millis","micros","map","constrain",
-  "min","max","abs","sqrt","pow","sin","cos","tan","random","randomSeed",
-  "setup","loop","main","printf","scanf","puts","putchar","getchar",
-  "Serial","print","println","begin","write","available","read",
+  "pinMode",
+  "digitalWrite",
+  "digitalRead",
+  "analogRead",
+  "analogWrite",
+  "delay",
+  "delayMicroseconds",
+  "millis",
+  "micros",
+  "map",
+  "constrain",
+  "min",
+  "max",
+  "abs",
+  "sqrt",
+  "pow",
+  "sin",
+  "cos",
+  "tan",
+  "random",
+  "randomSeed",
+  "setup",
+  "loop",
+  "main",
+  "printf",
+  "scanf",
+  "puts",
+  "putchar",
+  "getchar",
+  "Serial",
+  "print",
+  "println",
+  "begin",
+  "write",
+  "available",
+  "read",
 ]);
 
 const KNOWN_FUNCTIONS: string[] = [
-  "pinMode","digitalWrite","digitalRead","analogRead","analogWrite",
-  "delay","delayMicroseconds","millis","micros","map","constrain",
-  "min","max","abs","sqrt","pow","sin","cos","tan","random","randomSeed",
-  "setup","loop","main","printf","scanf","puts","putchar","getchar",
-  "print","println","begin","write","available","read",
+  "pinMode",
+  "digitalWrite",
+  "digitalRead",
+  "analogRead",
+  "analogWrite",
+  "delay",
+  "delayMicroseconds",
+  "millis",
+  "micros",
+  "map",
+  "constrain",
+  "min",
+  "max",
+  "abs",
+  "sqrt",
+  "pow",
+  "sin",
+  "cos",
+  "tan",
+  "random",
+  "randomSeed",
+  "setup",
+  "loop",
+  "main",
+  "printf",
+  "scanf",
+  "puts",
+  "putchar",
+  "getchar",
+  "print",
+  "println",
+  "begin",
+  "write",
+  "available",
+  "read",
 ];
 
 function extractNamesFromDeclList(list: string): string[] {
@@ -256,7 +356,10 @@ function extractNamesFromDeclList(list: string): string[] {
     // remover inicializador
     const noInit = p.split("=")[0];
     // remover [...] e *
-    const cleaned = noInit.replace(/\[[^\]]*\]/g, "").replace(/\*/g, "").trim();
+    const cleaned = noInit
+      .replace(/\[[^\]]*\]/g, "")
+      .replace(/\*/g, "")
+      .trim();
     const m = cleaned.match(/^([A-Za-z_]\w*)/);
     if (m) out.push(m[1]);
   }
@@ -329,7 +432,8 @@ function findUndeclaredUsages(cleaned: string): CodeWarning[] {
     let im: RegExpExecArray | null;
     while ((im = idRe.exec(ln)) !== null) {
       const name = im[1];
-      if (RESERVED.has(name) || declared.has(name) || reported.has(name) || userTypes.has(name)) continue;
+      if (RESERVED.has(name) || declared.has(name) || reported.has(name) || userTypes.has(name))
+        continue;
       // pular números puros (regex já exclui)
       const start = im.index;
       const before = ln.slice(0, start);

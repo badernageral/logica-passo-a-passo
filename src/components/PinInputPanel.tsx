@@ -85,7 +85,8 @@ export function PinInputPanel({ pinInputs, onChange }: Props) {
                   key={pin}
                   className="flex items-center gap-2 rounded-md border border-dashed bg-card/50 px-2 py-1"
                   style={{
-                    borderColor: cfg.mode === "digital" ? "var(--chalk-yellow)" : "var(--chalk-blue)",
+                    borderColor:
+                      cfg.mode === "digital" ? "var(--chalk-yellow)" : "var(--chalk-blue)",
                   }}
                 >
                   <span
@@ -123,7 +124,8 @@ export function PinInputPanel({ pinInputs, onChange }: Props) {
                             cfg.value === 1
                               ? "color-mix(in oklab, var(--chalk-yellow) 25%, transparent)"
                               : "transparent",
-                          color: cfg.value === 1 ? "var(--chalk-yellow)" : "var(--muted-foreground)",
+                          color:
+                            cfg.value === 1 ? "var(--chalk-yellow)" : "var(--muted-foreground)",
                           border: "1px solid var(--chalk-yellow)",
                         }}
                       >

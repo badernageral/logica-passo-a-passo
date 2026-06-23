@@ -66,7 +66,10 @@ export function PinCard({ p }: { p: PinState }) {
       <div className="mt-2 flex items-center gap-2">
         {/* LED visual */}
         <div
-          className={cn("h-6 w-6 rounded-full border-2 transition-all", p.justChanged && "animate-value-pop")}
+          className={cn(
+            "h-6 w-6 rounded-full border-2 transition-all",
+            p.justChanged && "animate-value-pop",
+          )}
           style={{
             borderColor: color,
             background:

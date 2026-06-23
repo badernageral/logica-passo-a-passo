@@ -14,7 +14,13 @@ function formatScalar(type: string, value: number | string, name?: string): stri
 
   const numericValue = typeof value === "number" ? value : Number(value);
   const looksLikePinVariable = name ? /porta|pino|pin/i.test(name) : false;
-  if (type === "int" && looksLikePinVariable && Number.isInteger(numericValue) && numericValue >= 14 && numericValue <= 21) {
+  if (
+    type === "int" &&
+    looksLikePinVariable &&
+    Number.isInteger(numericValue) &&
+    numericValue >= 14 &&
+    numericValue <= 21
+  ) {
     return `A${numericValue - 14}`;
   }
 
@@ -34,11 +40,15 @@ export function VariableCard({ v }: { v: Variable }) {
         isArray && "col-span-full",
         v.justCreated && "animate-chalk-write",
       )}
-      style={{ borderColor: color, boxShadow: `0 0 14px color-mix(in oklab, ${color} 30%, transparent)` }}
+      style={{
+        borderColor: color,
+        boxShadow: `0 0 14px color-mix(in oklab, ${color} 30%, transparent)`,
+      }}
     >
       <div className="flex items-baseline justify-between gap-2">
         <span className="chalk-text text-xs uppercase tracking-wider" style={{ color }}>
-          {v.type}{isArray ? `[${v.dims!.join("][")}]` : ""}
+          {v.type}
+          {isArray ? `[${v.dims!.join("][")}]` : ""}
         </span>
         {v.scope !== "main" && v.scope !== "global" && (
           <span className="chalk-text text-[10px] text-muted-foreground">
@@ -74,7 +84,9 @@ export function VariableCard({ v }: { v: Variable }) {
                   borderColor: color,
                   color,
                   fontFamily: "var(--font-mono)",
-                  background: highlighted ? `color-mix(in oklab, ${color} 18%, transparent)` : undefined,
+                  background: highlighted
+                    ? `color-mix(in oklab, ${color} 18%, transparent)`
+                    : undefined,
                 }}
               >
                 <span className="text-[10px] opacity-60">[{i}]</span>
@@ -91,7 +103,8 @@ export function VariableCard({ v }: { v: Variable }) {
               {(v.value as (number | string)[][]).map((row, i) => (
                 <tr key={i}>
                   {row.map((cell, j) => {
-                    const highlighted = v.lastIndex && v.lastIndex[0] === i && v.lastIndex[1] === j && v.justChanged;
+                    const highlighted =
+                      v.lastIndex && v.lastIndex[0] === i && v.lastIndex[1] === j && v.justChanged;
                     return (
                       <td
                         key={j}
@@ -104,7 +117,9 @@ export function VariableCard({ v }: { v: Variable }) {
                           color,
                           fontFamily: "var(--font-mono)",
                           minWidth: 36,
-                          background: highlighted ? `color-mix(in oklab, ${color} 18%, transparent)` : undefined,
+                          background: highlighted
+                            ? `color-mix(in oklab, ${color} 18%, transparent)`
+                            : undefined,
                         }}
                         title={`[${i}][${j}]`}
                       >

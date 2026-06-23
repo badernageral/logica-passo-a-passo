@@ -28,9 +28,7 @@ describe("getErrorHint", () => {
   });
 
   it("dá dica para índice fora do limite incluindo os valores", () => {
-    const hint = getErrorHint(
-      "Índice fora do limite ao acessar 'v': posição 5 (válido: 0 a 2)",
-    );
+    const hint = getErrorHint("Índice fora do limite ao acessar 'v': posição 5 (válido: 0 a 2)");
     expect(hint).toContain("5");
     expect(hint).toContain("2");
   });

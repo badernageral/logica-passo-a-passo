@@ -67,8 +67,7 @@ function getMimeType(filePath) {
 // ---------------------------------------------------------------------------
 function nodeRequestToWebRequest(req) {
   const proto =
-    req.headers["x-forwarded-proto"] ||
-    (req.socket && req.socket.encrypted ? "https" : "http");
+    req.headers["x-forwarded-proto"] || (req.socket && req.socket.encrypted ? "https" : "http");
   const host = req.headers["x-forwarded-host"] || req.headers.host || `${HOST}:${PORT}`;
   const url = `${proto}://${host}${req.url}`;
 

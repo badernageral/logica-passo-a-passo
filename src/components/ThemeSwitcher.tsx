@@ -46,7 +46,12 @@ export function ThemeSwitcher() {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="outline" size="lg" className="chalk-text text-base" title={`Tema: ${current.label}`}>
+        <Button
+          variant="outline"
+          size="lg"
+          className="chalk-text text-base"
+          title={`Tema: ${current.label}`}
+        >
           <Palette className="mr-2 h-4 w-4" /> Tema
         </Button>
       </DropdownMenuTrigger>

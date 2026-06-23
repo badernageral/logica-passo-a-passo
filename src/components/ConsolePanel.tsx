@@ -14,10 +14,15 @@ export function ConsolePanel({ lines }: { lines: OutputLine[] }) {
       style={{ fontFamily: "var(--font-mono)" }}
     >
       {lines.length === 0 && (
-        <div className="chalk-text text-muted-foreground">// A saída do monitor serial aparecerá aqui...</div>
+        <div className="chalk-text text-muted-foreground">
+          // A saída do monitor serial aparecerá aqui...
+        </div>
       )}
       {lines.map((l) => (
-        <div key={l.id} className="animate-print-line whitespace-pre-wrap text-[var(--chalk-green)] chalk-glow">
+        <div
+          key={l.id}
+          className="animate-print-line whitespace-pre-wrap text-[var(--chalk-green)] chalk-glow"
+        >
           {l.text || "\u00a0"}
         </div>
       ))}

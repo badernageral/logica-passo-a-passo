@@ -28,24 +28,79 @@ interface Props {
 
 // ── Syntax highlighting ────────────────────────────────────────
 const KEYWORDS = new Set([
-  "if","else","for","while","do","switch","case","default","break","continue","return",
-  "struct","typedef","enum","union","const","static","extern","volatile","register",
-  "sizeof","goto","inline","true","false",
-  "HIGH","LOW","INPUT","OUTPUT","INPUT_PULLUP","LED_BUILTIN",
-  "pinMode","digitalWrite","digitalRead","analogRead","analogWrite",
-  "delay","millis","micros","map","constrain","setup","loop","printf","scanf",
+  "if",
+  "else",
+  "for",
+  "while",
+  "do",
+  "switch",
+  "case",
+  "default",
+  "break",
+  "continue",
+  "return",
+  "struct",
+  "typedef",
+  "enum",
+  "union",
+  "const",
+  "static",
+  "extern",
+  "volatile",
+  "register",
+  "sizeof",
+  "goto",
+  "inline",
+  "true",
+  "false",
+  "HIGH",
+  "LOW",
+  "INPUT",
+  "OUTPUT",
+  "INPUT_PULLUP",
+  "LED_BUILTIN",
+  "pinMode",
+  "digitalWrite",
+  "digitalRead",
+  "analogRead",
+  "analogWrite",
+  "delay",
+  "millis",
+  "micros",
+  "map",
+  "constrain",
+  "setup",
+  "loop",
+  "printf",
+  "scanf",
 ]);
 
 const TYPES = new Set([
-  "int","float","double","char","void","long","short","unsigned","signed",
-  "bool","byte","boolean","String","Serial",
+  "int",
+  "float",
+  "double",
+  "char",
+  "void",
+  "long",
+  "short",
+  "unsigned",
+  "signed",
+  "bool",
+  "byte",
+  "boolean",
+  "String",
+  "Serial",
 ]);
 
-interface Token { text: string; cls: string }
+interface Token {
+  text: string;
+  cls: string;
+}
 
 function tokenizeLine(line: string): Token[] {
   const tokens: Token[] = [];
-  const re = /(\/\/.*$)|(\/\*[\s\S]*?\*\/)|("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')|(\b\d+(?:\.\d+)?\b)|(\b[A-Za-z_]\w*\b)|([<>=!]=|&&|\|\||<<|>>|[-+*/%&|^~!<>=,;{}()\[\].])|(\s+)/g;
+  const re =
+    /(\/\/.*$)|(\/\*[\s\S]*?\*\/)|("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')|(\b\d+(?:\.\d+)?\b)|(\b[A-Za-z_]\w*\b)|([<>=!]=|&&|\|\||<<|>>|[-+*/%&|^~!<>=,;{}()[\].])|(\s+)/g;
   let m: RegExpExecArray | null;
   let last = 0;
   while ((m = re.exec(line)) !== null) {
@@ -103,7 +158,10 @@ function renderHighlighted(text: string, varMap?: Map<string, Variable>): ReactN
       return (
         <span
           key={i}
-          className={(tok.cls || "") + " cursor-help underline decoration-dotted decoration-1 underline-offset-2"}
+          className={
+            (tok.cls || "") +
+            " cursor-help underline decoration-dotted decoration-1 underline-offset-2"
+          }
           title={formatVarTooltip(v)}
         >
           {tok.text}
@@ -207,7 +265,15 @@ function wordAt(text: string, pos: number): { start: number; end: number; word: 
 }
 
 // ── Component ──────────────────────────────────────────────────
-export function CodeEditor({ code, onChange, highlightLine, highlight, errorLine, readOnly, variables }: Props) {
+export function CodeEditor({
+  code,
+  onChange,
+  highlightLine,
+  highlight,
+  errorLine,
+  readOnly,
+  variables,
+}: Props) {
   const taRef = useRef<HTMLTextAreaElement>(null);
   const preRef = useRef<HTMLPreElement>(null);
   // Selection capturada no botão direito (textarea perde foco quando menu abre)
@@ -229,18 +295,26 @@ export function CodeEditor({ code, onChange, highlightLine, highlight, errorLine
   })();
 
   useEffect(() => {
-    const ta = taRef.current; const pre = preRef.current;
+    const ta = taRef.current;
+    const pre = preRef.current;
     if (!ta || !pre) return;
-    const sync = () => { pre.scrollTop = ta.scrollTop; pre.scrollLeft = ta.scrollLeft; };
+    const sync = () => {
+      pre.scrollTop = ta.scrollTop;
+      pre.scrollLeft = ta.scrollLeft;
+    };
     ta.addEventListener("scroll", sync);
     sync();
     return () => ta.removeEventListener("scroll", sync);
   }, []);
 
   useEffect(() => {
-    const ta = taRef.current; const pre = preRef.current;
+    const ta = taRef.current;
+    const pre = preRef.current;
     if (!ta || !pre || !readOnly) return;
-    const sync = () => { ta.scrollTop = pre.scrollTop; ta.scrollLeft = pre.scrollLeft; };
+    const sync = () => {
+      ta.scrollTop = pre.scrollTop;
+      ta.scrollLeft = pre.scrollLeft;
+    };
     pre.addEventListener("scroll", sync);
     return () => pre.removeEventListener("scroll", sync);
   }, [readOnly]);
@@ -285,8 +359,7 @@ export function CodeEditor({ code, onChange, highlightLine, highlight, errorLine
   const renderLine = (text: string, lineNumber: number) => {
     const isCurrent = highlightLine === lineNumber;
     const isError = errorLine === lineNumber;
-    const segHighlight =
-      highlight && highlight.line === lineNumber ? highlight : null;
+    const segHighlight = highlight && highlight.line === lineNumber ? highlight : null;
 
     if (isError) {
       return <span className="text-[var(--chalk-pink)] chalk-glow font-semibold">{text}</span>;
@@ -299,14 +372,20 @@ export function CodeEditor({ code, onChange, highlightLine, highlight, errorLine
       const after = text.slice(end);
       return (
         <>
-          <span className={isCurrent ? "text-[var(--chalk-yellow)] chalk-glow" : ""}>{before || ""}</span>
+          <span className={isCurrent ? "text-[var(--chalk-yellow)] chalk-glow" : ""}>
+            {before || ""}
+          </span>
           <span className="text-[var(--chalk-pink)] chalk-glow font-semibold">{middle}</span>
           <span className={isCurrent ? "text-[var(--chalk-yellow)] chalk-glow" : ""}>{after}</span>
         </>
       );
     }
     if (isCurrent) {
-      return <span className="text-[var(--chalk-yellow)] chalk-glow">{renderHighlighted(text, varMap)}</span>;
+      return (
+        <span className="text-[var(--chalk-yellow)] chalk-glow">
+          {renderHighlighted(text, varMap)}
+        </span>
+      );
     }
     return <span>{renderHighlighted(text, varMap)}</span>;
   };
@@ -348,7 +427,10 @@ export function CodeEditor({ code, onChange, highlightLine, highlight, errorLine
         if (!w) return;
         target = w.word;
       }
-      const replacement = window.prompt(`Renomear todas as ocorrências de "${target}" para:`, target);
+      const replacement = window.prompt(
+        `Renomear todas as ocorrências de "${target}" para:`,
+        target,
+      );
       if (replacement == null || replacement === target) return;
       // substitui apenas como palavra inteira se for um identificador
       const isIdent = /^[A-Za-z_]\w*$/.test(target);
@@ -412,8 +494,7 @@ export function CodeEditor({ code, onChange, highlightLine, highlight, errorLine
         const prevStart = code.lastIndexOf("\n", blockStart - 2) + 1;
         const prevEnd = blockStart - 1;
         const prev = code.slice(prevStart, prevEnd);
-        const newCode =
-          code.slice(0, prevStart) + block + "\n" + prev + code.slice(blockEnd);
+        const newCode = code.slice(0, prevStart) + block + "\n" + prev + code.slice(blockEnd);
         const delta = -(prev.length + 1);
         applyEdit(newCode, start + delta, end + delta);
       } else {
@@ -422,8 +503,7 @@ export function CodeEditor({ code, onChange, highlightLine, highlight, errorLine
         let nextEnd = code.indexOf("\n", nextStart);
         if (nextEnd === -1) nextEnd = code.length;
         const next = code.slice(nextStart, nextEnd);
-        const newCode =
-          code.slice(0, blockStart) + next + "\n" + block + code.slice(nextEnd);
+        const newCode = code.slice(0, blockStart) + next + "\n" + block + code.slice(nextEnd);
         const delta = next.length + 1;
         applyEdit(newCode, start + delta, end + delta);
       }
@@ -438,9 +518,7 @@ export function CodeEditor({ code, onChange, highlightLine, highlight, errorLine
       if (le === -1) le = code.length;
       const block = code.slice(ls, le);
       const blockLines = block.split("\n");
-      const allCommented = blockLines.every(
-        (ln) => ln.trim() === "" || /^\s*\/\//.test(ln),
-      );
+      const allCommented = blockLines.every((ln) => ln.trim() === "" || /^\s*\/\//.test(ln));
       const newLines = allCommented
         ? blockLines.map((ln) => ln.replace(/^(\s*)\/\/ ?/, "$1"))
         : blockLines.map((ln) => (ln.trim() === "" ? ln : ln.replace(/^(\s*)/, "$1// ")));
@@ -472,7 +550,10 @@ export function CodeEditor({ code, onChange, highlightLine, highlight, errorLine
     // Home : smart home
     if (e.key === "Home" && !e.shiftKey && !ctrl && !e.altKey) {
       const { start: ls } = lineBounds(start);
-      const lineText = code.slice(ls, code.indexOf("\n", ls) === -1 ? code.length : code.indexOf("\n", ls));
+      const lineText = code.slice(
+        ls,
+        code.indexOf("\n", ls) === -1 ? code.length : code.indexOf("\n", ls),
+      );
       const indentLen = (lineText.match(/^[\t ]*/) || [""])[0].length;
       const firstNonWs = ls + indentLen;
       e.preventDefault();
@@ -550,7 +631,6 @@ export function CodeEditor({ code, onChange, highlightLine, highlight, errorLine
     }
   };
 
-
   return (
     <div className="relative h-full w-full overflow-hidden rounded-md border border-border bg-card/40">
       <pre
@@ -569,7 +649,12 @@ export function CodeEditor({ code, onChange, highlightLine, highlight, errorLine
         ))}
       </pre>
 
-      <NumberGutter lines={lines.length} highlightLine={highlightLine} errorLine={errorLine ?? null} preRef={preRef} />
+      <NumberGutter
+        lines={lines.length}
+        highlightLine={highlightLine}
+        errorLine={errorLine ?? null}
+        preRef={preRef}
+      />
 
       <ContextMenu>
         <ContextMenuTrigger asChild>
@@ -646,9 +731,12 @@ function NumberGutter({
 }) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    const pre = preRef.current; const g = ref.current;
+    const pre = preRef.current;
+    const g = ref.current;
     if (!pre || !g) return;
-    const sync = () => { g.scrollTop = pre.scrollTop; };
+    const sync = () => {
+      g.scrollTop = pre.scrollTop;
+    };
     pre.addEventListener("scroll", sync);
     return () => pre.removeEventListener("scroll", sync);
   }, [preRef]);
@@ -667,8 +755,8 @@ function NumberGutter({
             (errorLine === i + 1
               ? "chalk-text text-[var(--chalk-pink)] chalk-glow font-semibold"
               : highlightLine === i + 1
-              ? "chalk-text text-[var(--chalk-yellow)] chalk-glow"
-              : "")
+                ? "chalk-text text-[var(--chalk-yellow)] chalk-glow"
+                : "")
           }
         >
           {i + 1}
