@@ -136,6 +136,39 @@ describe("Linguagem C — entrada (scanf)", () => {
     const src = `int main(){ int n; scanf("%d", &n); printf("%d", n * 2); }`;
     expect(out(src, ["21"])).toBe("42");
   });
+
+  it("lê duas variáveis em scanfs consecutivos", () => {
+    const src = `int main(){ int a; int b; scanf("%d", &a); scanf("%d", &b); printf("%d", a + b); }`;
+    expect(out(src, ["10", "32"])).toBe("42");
+  });
+});
+
+describe("Linguagem C — casos de borda", () => {
+  it("acessa elemento de matriz 2D", () => {
+    const src = `int main(){ int m[2][2]; m[0][0] = 1; m[1][1] = 9; printf("%d", m[1][1]); }`;
+    expect(out(src)).toBe("9");
+  });
+
+  it("compara char por igualdade", () => {
+    const src = `int main(){ char c = 'A'; if (c == 'A') { printf("sim"); } else { printf("nao"); } }`;
+    expect(out(src)).toBe("sim");
+  });
+
+  it("divisão por zero não trava (retorna 0)", () => {
+    const { state, serial } = run(`int main(){ int x = 10; printf("%d", x / 0); }`);
+    expect(state.error).toBeFalsy();
+    expect(serial.trim()).toBe("0");
+  });
+
+  it("chamadas de função aninhadas", () => {
+    const src = `int dobro(int n){ return n * 2; }
+int main(){ printf("%d", dobro(dobro(3))); }`;
+    expect(out(src)).toBe("12");
+  });
+
+  it("módulo e precedência combinados", () => {
+    expect(out(`int main(){ printf("%d", 17 % 5 + 2 * 3); }`)).toBe("8");
+  });
 });
 
 describe("Arduino", () => {
