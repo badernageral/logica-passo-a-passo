@@ -48,8 +48,10 @@ fi
 echo "==> $INSTALL"
 $INSTALL
 
-# 3) Garantir que o index.html fonte está no lugar antes de buildar
-git checkout -- index.html 2>/dev/null || true
+# 3) Gerar o index.html fonte a partir do template antes de buildar.
+#    O index.html da raiz é sempre um artefato (gitignored): primeiro recebe o
+#    template (entrada do Vite), depois é sobrescrito pelo build na etapa 5.
+cp index.template.html index.html
 
 # 4) Build estático
 echo "==> Build"

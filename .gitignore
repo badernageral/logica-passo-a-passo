@@ -17,6 +17,8 @@ dist-ssr
 *.local
 
 # Arquivos de build publicados na raiz pelo deploy.sh
+# O index.html servido é sempre um artefato de build (gerado de index.template.html).
+/index.html
 /assets
 /.htaccess
 

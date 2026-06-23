@@ -26,17 +26,18 @@ A análise estática de avisos também é filtrada por modo (`analyzeCode(code, 
 bash deploy.sh --no-pull   # sem git pull (quando já editou localmente)
 bash deploy.sh             # com git pull (padrão)
 ```
-**Regra crítica**: sempre commitar as alterações ANTES de rodar o deploy.
-O deploy faz `git checkout -- index.html` antes do build — alterações não commitadas em `index.html` são perdidas.
+O `index.html` da raiz é um **artefato de build** (gitignored). A entrada do Vite
+é o `index.template.html` (rastreado no git, com `<script src="/src/main.tsx">`).
 
 O deploy:
 1. `npm install` / `bun install`
-2. `git checkout -- index.html` (restaura o source)
+2. `cp index.template.html index.html` (gera a entrada do Vite)
 3. `vite build` → gera `dist/`
 4. Copia `dist/assets/` → raiz, `dist/index.html` → raiz, `dist/.htaccess` → raiz
 5. Remove `dist/`
 
-Arquivos de build na raiz (`.htaccess`, `assets/`) estão no `.gitignore`.
+Arquivos de build na raiz (`index.html`, `.htaccess`, `assets/`) estão no `.gitignore`,
+então o working tree não fica sujo após o deploy.
 
 ## Arquivos principais
 | Arquivo | Papel |
@@ -51,9 +52,8 @@ Arquivos de build na raiz (`.htaccess`, `assets/`) estão no `.gitignore`.
 | `deploy.sh` | Script de build + publicação |
 
 ## Armadilhas conhecidas
-- **`index.html` dualidade**: o arquivo fonte tem `<script src="/src/main.tsx">`;
-  após o deploy é sobrescrito pela versão compilada. O deploy restaura o fonte via
-  `git checkout -- index.html` antes de buildar. Nunca commitar o `index.html` buildado.
+- **Entrada do Vite**: editar `index.template.html` (rastreado), nunca o `index.html`
+  da raiz — este é gerado pelo deploy e está no `.gitignore`.
 - **`COMMENT_RE`**: usa `[^\n]*` (não `.*$`) para remover comentários `//` em todas
   as linhas — sem isso a flag `m` é necessária mas estava faltando.
 - **Tipos compostos**: `unsigned long`, `signed int`, etc. — o `declRe` em
