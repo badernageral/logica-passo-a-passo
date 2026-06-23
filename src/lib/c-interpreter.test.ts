@@ -71,6 +71,47 @@ describe("Linguagem C — controle de fluxo", () => {
   });
 });
 
+describe("Linguagem C — do/while, switch, ternário, break", () => {
+  it("do-while executa o corpo ao menos uma vez", () => {
+    const src = `int main(){ int i = 10; int n = 0; do { n = n + 1; i = i + 1; } while (i < 5); printf("%d", n); }`;
+    expect(out(src)).toBe("1");
+  });
+
+  it("do-while repete enquanto a condição é verdadeira", () => {
+    const src = `int main(){ int i = 0; int s = 0; do { s = s + i; i = i + 1; } while (i <= 3); printf("%d", s); }`;
+    expect(out(src)).toBe("6");
+  });
+
+  it("switch escolhe o case correspondente e para no break", () => {
+    const src = `int main(){ int x = 2; switch (x) { case 1: printf("um"); break; case 2: printf("dois"); break; default: printf("outro"); } }`;
+    expect(out(src)).toBe("dois");
+  });
+
+  it("switch cai para o default quando nenhum case casa", () => {
+    const src = `int main(){ int x = 9; switch (x) { case 1: printf("um"); break; default: printf("outro"); } }`;
+    expect(out(src)).toBe("outro");
+  });
+
+  it("switch faz fall-through sem break", () => {
+    const src = `int main(){ int x = 1; switch (x) { case 1: printf("a"); case 2: printf("b"); break; case 3: printf("c"); } }`;
+    expect(out(src)).toBe("ab");
+  });
+
+  it("operador ternário escolhe o ramo certo", () => {
+    expect(out(`int main(){ int x = 7; printf("%d", x > 5 ? 100 : 200); }`)).toBe("100");
+  });
+
+  it("break interrompe um while", () => {
+    const src = `int main(){ int i = 0; while (1) { if (i == 3) { break; } i = i + 1; } printf("%d", i); }`;
+    expect(out(src)).toBe("3");
+  });
+
+  it("break interrompe um for", () => {
+    const src = `int main(){ int soma = 0; for (int i = 0; i < 100; i = i + 1) { if (i == 5) break; soma = soma + i; } printf("%d", soma); }`;
+    expect(out(src)).toBe("10");
+  });
+});
+
 describe("Linguagem C — funções", () => {
   it("chama função com retorno", () => {
     const src = `int soma(int a, int b){ return a + b; } int main(){ printf("%d", soma(3, 4)); }`;

@@ -31,6 +31,11 @@ export const KEYWORDS = new Set([
   "else",
   "while",
   "for",
+  "do",
+  "switch",
+  "case",
+  "default",
+  "break",
   "return",
   "printf",
   "scanf",
@@ -169,7 +174,7 @@ export function tokenize(src: string, directives?: Directive[]): Tok[] {
       continue;
     }
     // simples
-    if ("+-*/%=<>!(){};,&[]".includes(c)) {
+    if ("+-*/%=<>!(){};,&[]?:".includes(c)) {
       const start = i;
       push(c, c, line, start, i + 1, lineStart);
       i++;
@@ -338,7 +343,14 @@ export class Parser {
       return this.parseDecl();
     if (tk.t === "if") return this.parseIf();
     if (tk.t === "while") return this.parseWhile();
+    if (tk.t === "do") return this.parseDoWhile();
     if (tk.t === "for") return this.parseFor();
+    if (tk.t === "switch") return this.parseSwitch();
+    if (tk.t === "break") {
+      this.eat("break");
+      this.eat(";");
+      return { k: "break", line: tk.line };
+    }
     if (tk.t === "return") return this.parseReturn();
     if (tk.t === "printf") return this.parsePrintf();
     if (tk.t === "scanf") return this.parseScanf();
@@ -463,6 +475,49 @@ export class Parser {
     this.eat(")");
     const info = this.parseBlockOrStmtWithEnd();
     return { k: "while", cond, body: info.body, line, endLine: info.endLine };
+  }
+
+  parseDoWhile(): Stmt {
+    const line = this.eat("do").line;
+    const info = this.parseBlockOrStmtWithEnd();
+    this.eat("while");
+    this.eat("(");
+    const cond = this.parseExpr();
+    this.eat(")");
+    const semi = this.eat(";");
+    return { k: "dowhile", cond, body: info.body, line, endLine: semi.line };
+  }
+
+  parseSwitch(): Stmt {
+    const line = this.eat("switch").line;
+    this.eat("(");
+    const disc = this.parseExpr();
+    this.eat(")");
+    this.eat("{");
+    const cases: { test: Expr | null; body: Stmt[]; line: number }[] = [];
+    while (!this.match("}")) {
+      const labelTok = this.peek();
+      let test: Expr | null;
+      if (this.match("case")) {
+        this.eat("case");
+        test = this.parseExpr();
+      } else if (this.match("default")) {
+        this.eat("default");
+        test = null;
+      } else {
+        throw new Error(
+          `Dentro de switch esperava-se 'case' ou 'default' (linha ${labelTok.line}), encontrado '${labelTok.v}'.`,
+        );
+      }
+      this.eat(":");
+      const body: Stmt[] = [];
+      while (!this.match("case") && !this.match("default") && !this.match("}")) {
+        body.push(this.parseStmt());
+      }
+      cases.push({ test, body, line: labelTok.line });
+    }
+    const close = this.eat("}");
+    return { k: "switch", disc, cases, line, endLine: close.line };
   }
 
   parseFor(): Stmt {
@@ -598,7 +653,7 @@ export class Parser {
     return this.parseAssign();
   }
   parseAssign(): Expr {
-    const left = this.parseLogicOr();
+    const left = this.parseTernary();
     if (this.match("=")) {
       this.eat("=");
       const right = this.parseAssign();
@@ -622,6 +677,17 @@ export class Parser {
       throw new Error("Lado esquerdo inválido");
     }
     return left;
+  }
+  parseTernary(): Expr {
+    const cond = this.parseLogicOr();
+    if (this.match("?")) {
+      this.eat("?");
+      const a = this.parseExpr();
+      this.eat(":");
+      const b = this.parseTernary();
+      return { k: "ternary", cond, a, b };
+    }
+    return cond;
   }
   parseLogicOr(): Expr {
     let a = this.parseLogicAnd();

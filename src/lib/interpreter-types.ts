@@ -104,7 +104,8 @@ export type Expr =
   | { k: "un"; op: string; a: Expr }
   | { k: "assign"; name: string; v: Expr; indices?: Expr[] }
   | { k: "call"; name: string; args: Expr[] }
-  | { k: "index"; name: string; indices: Expr[] };
+  | { k: "index"; name: string; indices: Expr[] }
+  | { k: "ternary"; cond: Expr; a: Expr; b: Expr };
 
 export type Stmt =
   | {
@@ -126,6 +127,15 @@ export type Stmt =
       elseEndLine?: number;
     }
   | { k: "while"; cond: Expr; body: Stmt[]; line: number; endLine?: number }
+  | { k: "dowhile"; cond: Expr; body: Stmt[]; line: number; endLine?: number }
+  | {
+      k: "switch";
+      disc: Expr;
+      cases: { test: Expr | null; body: Stmt[]; line: number }[];
+      line: number;
+      endLine?: number;
+    }
+  | { k: "break"; line: number }
   | {
       k: "for";
       init: Stmt | null;

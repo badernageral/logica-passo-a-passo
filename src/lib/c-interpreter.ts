@@ -84,6 +84,11 @@ const ARDUINO_CONSTANTS: Record<string, number> = {
   A7: 21,
 };
 
+/** Sinal interno lançado por 'break' e capturado pelo laço/switch que o contém. */
+function isBreakSignal(e: unknown): e is { __break: true } {
+  return typeof e === "object" && e !== null && "__break" in e;
+}
+
 /** Extrai o número da linha de uma mensagem de erro do parser/interpretador. */
 function extractLineFromError(msg: string): number | null {
   if (!msg) return null;
@@ -107,7 +112,16 @@ type Task =
       fnName?: string;
       callExpr?: Expr;
     }
-  | { kind: "while-check"; cond: Expr; body: Stmt[]; scope: string; line: number; endLine?: number }
+  | {
+      kind: "while-check";
+      cond: Expr;
+      body: Stmt[];
+      scope: string;
+      line: number;
+      endLine?: number;
+      loopKind?: "while" | "dowhile";
+    }
+  | { kind: "switch-end"; scope: string; line: number }
   | { kind: "for-init"; forStmt: Extract<Stmt, { k: "for" }>; scope: string }
   | { kind: "for-cond"; forStmt: Extract<Stmt, { k: "for" }>; scope: string }
   | { kind: "for-step"; forStmt: Extract<Stmt, { k: "for" }>; scope: string }
@@ -443,6 +457,8 @@ export class CInterpreter {
         return `${e.name}(${e.args.map((a) => this.exprToString(a)).join(", ")})`;
       case "index":
         return `${e.name}${e.indices.map((i) => `[${this.exprToString(i)}]`).join("")}`;
+      case "ternary":
+        return `${this.exprToString(e.cond)} ? ${this.exprToString(e.a)} : ${this.exprToString(e.b)}`;
     }
   }
 
@@ -585,6 +601,11 @@ export class CInterpreter {
             return a >= b ? 1 : 0;
         }
         return 0;
+      }
+      case "ternary": {
+        return this.truthy(this.evalExpr(e.cond, scope))
+          ? this.evalExpr(e.a, scope)
+          : this.evalExpr(e.b, scope);
       }
       case "call": {
         // Se já foi calculado passo-a-passo, devolve o valor em cache.
@@ -737,21 +758,74 @@ export class CInterpreter {
         else if (s.else) this.runBlockSync(s.else, scope);
         break;
       case "while":
-        while (this.truthy(this.evalExpr(s.cond, scope))) this.runBlockSync(s.body, scope);
+        try {
+          while (this.truthy(this.evalExpr(s.cond, scope))) this.runBlockSync(s.body, scope);
+        } catch (e) {
+          if (!isBreakSignal(e)) throw e;
+        }
+        break;
+      case "dowhile":
+        try {
+          do {
+            this.runBlockSync(s.body, scope);
+          } while (this.truthy(this.evalExpr(s.cond, scope)));
+        } catch (e) {
+          if (!isBreakSignal(e)) throw e;
+        }
         break;
       case "for":
         if (s.init) this.runStmtSync(s.init, scope);
-        while (s.cond ? this.truthy(this.evalExpr(s.cond, scope)) : true) {
-          this.runBlockSync(s.body, scope);
-          if (s.step) this.evalExpr(s.step, scope);
+        try {
+          while (s.cond ? this.truthy(this.evalExpr(s.cond, scope)) : true) {
+            this.runBlockSync(s.body, scope);
+            if (s.step) this.evalExpr(s.step, scope);
+          }
+        } catch (e) {
+          if (!isBreakSignal(e)) throw e;
         }
         break;
+      case "switch": {
+        const d = this.evalExpr(s.disc, scope);
+        const start = this.switchStartIndex(s.cases, d, scope);
+        if (start >= 0) {
+          try {
+            for (let i = start; i < s.cases.length; i++) this.runBlockSync(s.cases[i].body, scope);
+          } catch (e) {
+            if (!isBreakSignal(e)) throw e;
+          }
+        }
+        break;
+      }
+      case "break":
+        throw { __break: true };
       case "return":
         throw { __return: s.e ? this.evalExpr(s.e, scope) : 0 };
       case "block":
         this.runBlockSync(s.body, scope);
         break;
     }
+  }
+
+  /**
+   * Índice da primeira clause a executar num switch: o 'case' cujo valor
+   * casa com o discriminante; senão o 'default'; senão -1 (nenhuma).
+   */
+  private switchStartIndex(
+    cases: Extract<Stmt, { k: "switch" }>["cases"],
+    discVal: number | string,
+    scope: string,
+  ): number {
+    let defaultIdx = -1;
+    for (let i = 0; i < cases.length; i++) {
+      const c = cases[i];
+      if (c.test === null) {
+        defaultIdx = i;
+        continue;
+      }
+      const cv = this.evalExpr(c.test, scope);
+      if (cv === discVal || Number(cv) === Number(discVal)) return i;
+    }
+    return defaultIdx;
   }
 
   private doPrintf(s: Extract<Stmt, { k: "printf" }>, scope: string): string {
@@ -929,7 +1003,12 @@ export class CInterpreter {
         // Reservado para uso futuro; atualmente o block-end já trata o cleanup.
         return { kind: "noop", line: task.line, message: "" };
       }
+      case "switch-end": {
+        // Switch terminou normalmente (chegou ao fim sem break).
+        return { kind: "exit-block", line: task.line, message: "Fim do switch." };
+      }
       case "while-check": {
+        const loop = task.loopKind === "dowhile" ? "do-while" : "while";
         const ok = this.truthy(this.evalExpr(task.cond, task.scope));
         if (ok) {
           this.stack.push(task); // re-avalia depois
@@ -938,13 +1017,13 @@ export class CInterpreter {
           return {
             kind: "enter-block",
             line: task.line,
-            message: `Condição verdadeira → entrando no while.\n${this.condHint(task.cond, task.scope, true)}`,
+            message: `Condição verdadeira → repetindo o ${loop}.\n${this.condHint(task.cond, task.scope, true)}`,
           };
         }
         return {
           kind: "exit-block",
           line: task.endLine ?? task.line,
-          message: `Condição falsa → saindo do while.\n${this.condHint(task.cond, task.scope, false)}`,
+          message: `Condição falsa → saindo do ${loop}.\n${this.condHint(task.cond, task.scope, false)}`,
         };
       }
       case "for-init": {
@@ -1118,6 +1197,25 @@ export class CInterpreter {
     return out;
   }
 
+  /** Executa 'break': desempilha tarefas até o laço/switch mais interno. */
+  private execBreak(line: number): StepEvent {
+    while (this.stack.length) {
+      const top = this.stack[this.stack.length - 1];
+      // Não atravessa fronteiras de função: aí seria 'break' fora de laço.
+      if (top.kind === "block-end" && top.isFunctionFrame) break;
+      const t = this.stack.pop()!;
+      if (
+        t.kind === "switch-end" ||
+        t.kind === "while-check" ||
+        t.kind === "for-cond" ||
+        t.kind === "for-step"
+      ) {
+        return { kind: "exit-block", line, message: "break → saindo do laço/switch." };
+      }
+    }
+    throw new Error(`'break' fora de um laço ou switch (linha ${line}).`);
+  }
+
   private execStmt(s: Stmt, scope: string): StepEvent {
     // Antes de executar a stmt, se ela contém chamadas a funções do usuário ou
     // leituras de pino, executamos cada uma passo-a-passo antes de re-executar.
@@ -1259,6 +1357,50 @@ export class CInterpreter {
         this.stack.push({ kind: "for-init", forStmt: s, scope });
         return { kind: "noop", line: s.line, message: "Iniciando laço for…" };
       }
+      case "dowhile": {
+        // O corpo executa ao menos uma vez; a condição é testada no final.
+        this.stack.push({
+          kind: "while-check",
+          cond: s.cond,
+          body: s.body,
+          scope,
+          line: s.line,
+          endLine: s.endLine,
+          loopKind: "dowhile",
+        });
+        for (let i = s.body.length - 1; i >= 0; i--)
+          this.stack.push({ kind: "stmt", stmt: s.body[i], scope });
+        return {
+          kind: "enter-block",
+          line: s.line,
+          message: "do-while: executando o corpo (a condição é testada no final).",
+        };
+      }
+      case "switch": {
+        const d = this.evalExpr(s.disc, scope);
+        const start = this.switchStartIndex(s.cases, d, scope);
+        this.stack.push({ kind: "switch-end", scope, line: s.endLine ?? s.line });
+        if (start >= 0) {
+          // Fall-through: empilha o corpo de start..fim em sequência.
+          const flat: Stmt[] = [];
+          for (let i = start; i < s.cases.length; i++) flat.push(...s.cases[i].body);
+          for (let i = flat.length - 1; i >= 0; i--)
+            this.stack.push({ kind: "stmt", stmt: flat[i], scope });
+          const label = s.cases[start].test === null ? "default" : "case";
+          return {
+            kind: "enter-block",
+            line: s.cases[start].line,
+            message: `switch: entrando no '${label}' correspondente (valor ${d}).`,
+          };
+        }
+        return {
+          kind: "noop",
+          line: s.line,
+          message: `switch: nenhum case corresponde ao valor ${d} (e não há default).`,
+        };
+      }
+      case "break":
+        return this.execBreak(s.line);
       case "return": {
         // Avaliar valor de retorno no escopo atual (antes de remover variáveis).
         const retVal = s.e ? this.evalExpr(s.e, scope) : 0;
