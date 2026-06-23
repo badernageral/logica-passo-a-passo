@@ -408,7 +408,7 @@ function Index() {
                           <div className="chalk-text mb-2 text-sm uppercase tracking-widest text-muted-foreground">
                             ⚡ Pinos configurados (INPUT / OUTPUT)
                           </div>
-                          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                          <div className="grid gap-3 grid-cols-[repeat(auto-fill,minmax(180px,1fr))]">
                             {pinStates.map((p) => (
                               <PinCard key={p.pin} p={p} />
                             ))}
@@ -420,7 +420,7 @@ function Index() {
                           <div className="chalk-text mb-2 text-sm uppercase tracking-widest text-muted-foreground">
                             Escopo: <span className="text-primary">{scope === "global" ? "global" : scope.split("#")[0]}</span>
                           </div>
-                          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                          <div className="grid gap-3 grid-cols-[repeat(auto-fill,minmax(180px,1fr))]">
                             {vars.map((v) => (
                               <VariableCard key={`${v.scope}-${v.name}`} v={v} />
                             ))}
@@ -432,7 +432,7 @@ function Index() {
                           <div className="chalk-text mb-2 text-sm uppercase tracking-widest text-muted-foreground">
                             ↩ Retornos de funções
                           </div>
-                          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                          <div className="grid gap-3 grid-cols-[repeat(auto-fill,minmax(180px,1fr))]">
                             {visibleReturns.map((r) => (
                               <div
                                 key={r.id}

@@ -31,7 +31,7 @@ export function VariableCard({ v }: { v: Variable }) {
     <div
       className={cn(
         "relative rounded-md border-2 border-dashed bg-card/30 p-3 transition-all",
-        isArray && "col-span-2 sm:col-span-3",
+        isArray && "col-span-full",
         v.justCreated && "animate-chalk-write",
       )}
       style={{ borderColor: color, boxShadow: `0 0 14px color-mix(in oklab, ${color} 30%, transparent)` }}
