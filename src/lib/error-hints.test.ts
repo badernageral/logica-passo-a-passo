@@ -33,6 +33,31 @@ describe("getErrorHint", () => {
     expect(hint).toContain("2");
   });
 
+  it("dá dica para biblioteca não incluída, citando o cabeçalho certo", () => {
+    const stdio = getErrorHint(
+      "'printf' foi usado na linha 2, mas a biblioteca <stdio.h> não foi incluída. Adicione '#include <stdio.h>' no topo do programa.",
+    );
+    // Não pode cair na regra genérica de printf, que vem depois no array.
+    expect(stdio).toContain("stdio.h");
+    expect(getErrorHint("a biblioteca <math.h> não foi incluída")).toContain("math.h");
+    expect(getErrorHint("a biblioteca <string.h> não foi incluída")).toContain("string.h");
+  });
+
+  it("dá dica para nome de biblioteca digitado errado", () => {
+    const hint = getErrorHint(
+      "A biblioteca 'sdtio.h' incluída na linha 1 não existe. Você quis dizer 'stdio.h'?",
+    );
+    expect(hint).toContain("sdtio.h");
+    expect(hint).toContain("stdio.h");
+  });
+
+  it("dá dica para diretiva #include mal escrita", () => {
+    const hint = getErrorHint(
+      "Erro na diretiva include da linha 1: Falta o '#' antes de 'include'. O correto é '#include <stdio.h>'.",
+    );
+    expect(hint).toContain("#include <stdio.h>");
+  });
+
   it("dá dica para setup ausente (Arduino)", () => {
     expect(getErrorHint("Função 'setup' não encontrada.")).toBeTruthy();
   });

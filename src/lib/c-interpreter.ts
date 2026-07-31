@@ -43,6 +43,7 @@ import {
   preprocessStructMemberAccess,
   checkBraceBalance,
 } from "./interpreter-preprocess";
+import { findMalformedIncludes, findMissingIncludes, findUnknownIncludes } from "./source-scan";
 
 // Re-exporta os tipos públicos para manter a API de importação estável.
 export type {
@@ -223,6 +224,25 @@ export class CInterpreter {
         }
       }
 
+      // Diretivas #include mal escritas. Precisa vir ANTES do tokenizer: um
+      // 'include' sem '#' vira expressão solta e o parser falharia com um
+      // "Token inesperado" que não diz nada ao aluno.
+      const [badSyntax] = findMalformedIncludes(source);
+      if (badSyntax) {
+        throw new Error(
+          `Erro na diretiva include da linha ${badSyntax.line}: ${badSyntax.problem} O correto é '${badSyntax.fix}'.`,
+        );
+      }
+
+      // Nome de biblioteca inexistente no #include (ex.: <sdtio.h>). Só acusa
+      // quando há um candidato óbvio, então bibliotecas de terceiros passam.
+      const [badInclude] = findUnknownIncludes(source);
+      if (badInclude) {
+        throw new Error(
+          `A biblioteca '${badInclude.name}' incluída na linha ${badInclude.line} não existe. Você quis dizer '${badInclude.suggestion}'?`,
+        );
+      }
+
       const toks = tokenize(preprocessed, directives);
       const parser = new Parser(toks);
       const { fns, globals } = parser.parseProgram();
@@ -250,6 +270,18 @@ export class CInterpreter {
       const setupFn = this.fns["setup"];
       const loopFn = this.fns["loop"];
       const mainFn = this.fns["main"];
+
+      // Em C, usar uma função da biblioteca padrão exige o #include correspondente.
+      // Checado sobre o fonte ORIGINAL: o pré-processamento converte Serial.print
+      // em printf, o que acusaria um falso positivo em sketches Arduino.
+      if (!setupFn && !loopFn) {
+        const [miss] = findMissingIncludes(source);
+        if (miss) {
+          throw new Error(
+            `'${miss.fn}' foi usado na linha ${miss.line}, mas a biblioteca <${miss.header}> não foi incluída. Adicione '#include <${miss.header}>' no topo do programa.`,
+          );
+        }
+      }
 
       if (setupFn || loopFn) {
         // Modo Arduino — exigir ambas as funções.

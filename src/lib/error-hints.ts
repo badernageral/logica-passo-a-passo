@@ -76,6 +76,31 @@ const RULES: HintRule[] = [
       `A função '${m[1]}' não foi encontrada. Verifique se ela foi definida acima do main e se o nome está escrito exatamente igual (C diferencia maiúsculas/minúsculas).`,
   },
   {
+    test: /Erro na diretiva include da linha \d+: .*O correto é '([^']+)'/i,
+    hint: (m) =>
+      `A linha do '#include' precisa seguir exatamente este formato: '${m[1]}' — com o '#' colado em 'include', o nome da biblioteca entre '<' e '>', e sem ponto-e-vírgula no final. É a única instrução em C que não termina com ';'.`,
+  },
+  {
+    test: /A biblioteca '([^']+)' incluída na linha \d+ não existe\. Você quis dizer '([^']+)'/i,
+    hint: (m) =>
+      `Não existe uma biblioteca chamada '${m[1]}' — o nome está escrito errado. Troque por '#include <${m[2]}>'. Vale conferir letra por letra: trocar a ordem de duas letras (por exemplo 'sdtio' em vez de 'stdio') é o engano mais comum.`,
+  },
+  {
+    // Precisa vir antes das regras genéricas de printf/scanf abaixo,
+    // que casariam com o nome da função citado nesta mensagem.
+    test: /biblioteca <([^>]+)> não foi incluída/i,
+    hint: (m) => {
+      const header = m[1].toLowerCase();
+      if (header === "stdio.h")
+        return `printf e scanf são declarados em <stdio.h> ("standard input/output"). Sem o #include, o compilador não sabe que essas funções existem. Por isso quase todo programa em C começa com '#include <stdio.h>' na primeira linha.`;
+      if (header === "math.h")
+        return `Funções matemáticas como sqrt (raiz quadrada), pow (potência), sin e cos são declaradas em <math.h>. Adicione '#include <math.h>' junto com os outros includes, no topo do programa.`;
+      if (header === "string.h")
+        return `Funções que manipulam texto, como strlen (comprimento), strcpy (cópia) e strcmp (comparação), são declaradas em <string.h>. Adicione '#include <string.h>' no topo do programa.`;
+      return `A função usada é declarada em <${m[1]}>. Adicione '#include <${m[1]}>' no topo do programa, junto com os outros includes.`;
+    },
+  },
+  {
     test: /Divisão por zero/i,
     hint: () =>
       `Você tentou dividir um número por zero, o que é matematicamente indefinido. Antes de dividir, verifique se o divisor é diferente de zero (ex.: 'if (b != 0) { ... }').`,

@@ -4,20 +4,19 @@
  * sobre padrões frequentes de erro.
  */
 
+import {
+  stripComments,
+  stripStrings,
+  findMissingIncludes,
+  findUnknownIncludes,
+  findMalformedIncludes,
+  isIncludeLine,
+} from "./source-scan";
+
 export interface CodeWarning {
   line: number;
   message: string;
   severity: "warning" | "info";
-}
-
-const COMMENT_RE = /\/\/[^\n]*|\/\*[\s\S]*?\*\//g;
-
-function stripComments(src: string): string {
-  return src.replace(COMMENT_RE, (m) => m.replace(/[^\n]/g, " "));
-}
-
-function stripStrings(src: string): string {
-  return src.replace(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g, (m) => m.replace(/[^\n]/g, " "));
 }
 
 export function analyzeCode(code: string, mode: "arduino" | "c" = "arduino"): CodeWarning[] {
@@ -26,7 +25,44 @@ export function analyzeCode(code: string, mode: "arduino" | "c" = "arduino"): Co
   const lines = cleaned.split("\n");
   const rawLines = code.split("\n");
 
-  // 0) Declaração com valor mas sem '=' . Ex.: int x 0;
+  // 0) Problemas de #include. Vêm primeiro de propósito: são os erros mais
+  // fundamentais e, no fim da lista, seriam cortados pelo slice(0, 8) em
+  // códigos com muitos outros problemas. A ordem entre eles vai da causa raiz
+  // para a consequência: sintaxe da diretiva → nome inexistente → falta incluir.
+
+  // 0a) Diretiva mal escrita: sem '#', sem fechar '>'/aspas, sem nome.
+  for (const bad of findMalformedIncludes(code)) {
+    warnings.push({
+      line: bad.line,
+      severity: "warning",
+      message: `${bad.problem} O correto é '${bad.fix}'.`,
+    });
+  }
+
+  // 0b) Nome de biblioteca digitado errado (ex.: <sdtio.h>).
+  for (const unk of findUnknownIncludes(code)) {
+    warnings.push({
+      line: unk.line,
+      severity: "warning",
+      message: `A biblioteca '${unk.name}' não existe. Você quis dizer '${unk.suggestion}'? Confira a digitação no '#include'.`,
+    });
+  }
+
+  // 0c) Função de biblioteca usada sem o #include correspondente. Não depende
+  // do seletor de modo — qualquer 'printf' escrito no código exige <stdio.h>,
+  // inclusive num sketch Arduino (lá printf sequer existe). 'Serial.print' só
+  // vira 'printf' no pré-processamento, e a varredura lê o fonte ORIGINAL,
+  // então sketches normais não são acusados.
+  const missingIncludes = findMissingIncludes(code);
+  for (const miss of missingIncludes) {
+    warnings.push({
+      line: miss.line,
+      severity: "warning",
+      message: `'${miss.fn}' precisa da biblioteca <${miss.header}>, que não foi incluída. Adicione '#include <${miss.header}>' no topo do programa.`,
+    });
+  }
+
+  // 1) Declaração com valor mas sem '=' . Ex.: int x 0;
   const declAssignRe = new RegExp(`^\\s*(?:${TYPE_KW})\\s+([A-Za-z_]\\w*)\\s+([^=;{}\\s][^;{}]*);`);
   lines.forEach((ln, i) => {
     const m = ln.match(declAssignRe);
@@ -42,7 +78,7 @@ export function analyzeCode(code: string, mode: "arduino" | "c" = "arduino"): Co
     });
   });
 
-  // 1) `=` em condição de if/while
+  // 2) `=` em condição de if/while
   lines.forEach((ln, i) => {
     const m = ln.match(/\b(if|while)\s*\(([^)]*)\)/);
     if (m) {
@@ -82,7 +118,7 @@ export function analyzeCode(code: string, mode: "arduino" | "c" = "arduino"): Co
     }
   });
 
-  // 2) Linha que parece instrução mas falta ';'
+  // 3) Linha que parece instrução mas falta ';'
   lines.forEach((ln, i) => {
     const t = ln.trim();
     if (!t) return;
@@ -91,8 +127,9 @@ export function analyzeCode(code: string, mode: "arduino" | "c" = "arduino"): Co
     if (/[;{},:]$/.test(t)) return;
     if (/^[})]/.test(t)) return;
     if (/\b(if|else|for|while|do|switch|case|default)\b/.test(t)) return;
-    // Linhas com apenas '#include' etc.
-    if (t.startsWith("#")) return;
+    // Diretivas de inclusão não são instruções (e não levam ';').
+    // Cobre também o caso sem '#', já apontado por findMalformedIncludes.
+    if (isIncludeLine(t) || t.startsWith("#")) return;
     // Cabeçalho de função: termina com ')' e a próxima linha não-vazia começa com '{'
     if (/\)\s*$/.test(t)) {
       const next = lines.slice(i + 1).find((x) => x.trim().length > 0);
@@ -111,7 +148,7 @@ export function analyzeCode(code: string, mode: "arduino" | "c" = "arduino"): Co
     }
   });
 
-  // 3) Balanço de chaves
+  // 4) Balanço de chaves
   let open = 0,
     close = 0;
   for (const ch of cleaned) {
@@ -129,7 +166,7 @@ export function analyzeCode(code: string, mode: "arduino" | "c" = "arduino"): Co
     });
   }
 
-  // 4) Balanço de parênteses por linha
+  // 5) Balanço de parênteses por linha
   lines.forEach((ln, i) => {
     let o = 0,
       c = 0;
@@ -146,7 +183,7 @@ export function analyzeCode(code: string, mode: "arduino" | "c" = "arduino"): Co
     }
   });
 
-  // 5) Strings não fechadas (linha a linha — em C strings normalmente não cruzam linhas)
+  // 6) Strings não fechadas (linha a linha — em C strings normalmente não cruzam linhas)
   rawLines.forEach((ln, i) => {
     const noComments = ln.replace(/\/\/.*$/, "");
     let inStr = false;
@@ -171,7 +208,7 @@ export function analyzeCode(code: string, mode: "arduino" | "c" = "arduino"): Co
     }
   });
 
-  // 6) Arduino: setup/loop ausentes (apenas se já existe pelo menos uma função)
+  // 7) Arduino: setup/loop ausentes (apenas se já existe pelo menos uma função)
   if (mode === "arduino") {
     const hasAnyFn = /\b\w+\s+\w+\s*\([^)]*\)\s*\{/.test(cleaned);
     if (hasAnyFn) {
@@ -192,8 +229,9 @@ export function analyzeCode(code: string, mode: "arduino" | "c" = "arduino"): Co
     }
   }
 
-  // 7) Variáveis usadas sem declaração prévia
-  warnings.push(...findUndeclaredUsages(cleaned));
+  // 8) Variáveis usadas sem declaração prévia. Funções já apontadas acima são
+  // puladas para o aluno não receber dois avisos sobre o mesmo nome.
+  warnings.push(...findUndeclaredUsages(cleaned, new Set(missingIncludes.map((mi) => mi.fn))));
 
   // Limita a quantidade exibida para não poluir
   return warnings.slice(0, 8);
@@ -366,7 +404,7 @@ function extractNamesFromDeclList(list: string): string[] {
   return out;
 }
 
-function findUndeclaredUsages(cleaned: string): CodeWarning[] {
+function findUndeclaredUsages(cleaned: string, skip: Set<string> = new Set()): CodeWarning[] {
   const declared = new Set<string>();
   const lines = cleaned.split("\n");
 
@@ -432,7 +470,13 @@ function findUndeclaredUsages(cleaned: string): CodeWarning[] {
     let im: RegExpExecArray | null;
     while ((im = idRe.exec(ln)) !== null) {
       const name = im[1];
-      if (RESERVED.has(name) || declared.has(name) || reported.has(name) || userTypes.has(name))
+      if (
+        RESERVED.has(name) ||
+        declared.has(name) ||
+        reported.has(name) ||
+        userTypes.has(name) ||
+        skip.has(name)
+      )
         continue;
       // pular números puros (regex já exclui)
       const start = im.index;
@@ -444,8 +488,8 @@ function findUndeclaredUsages(cleaned: string): CodeWarning[] {
       if (new RegExp(`\\b(?:${TYPE_KW})\\s*\\*?\\s*$`).test(before)) continue;
       // Pular labels: name:
       if (/^\s*:/.test(after) && !/^\s*::/.test(after)) continue;
-      // Pular #include <...> e diretivas
-      if (/^\s*#/.test(ln)) continue;
+      // Pular diretivas de inclusão (com ou sem '#') e demais diretivas
+      if (isIncludeLine(ln) || /^\s*#/.test(ln)) continue;
       // Pular literais hex/sufixos não capturados
       if (/^[0-9]/.test(name)) continue;
 

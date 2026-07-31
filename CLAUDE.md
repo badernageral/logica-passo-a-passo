@@ -45,6 +45,7 @@ então o working tree não fica sujo após o deploy.
 | `src/lib/c-interpreter.ts` | Interpretador C/Arduino (não alterar sem cautela) |
 | `src/lib/code-warnings.ts` | Análise estática pedagógica (avisos antes da execução) |
 | `src/lib/error-hints.ts` | Dicas didáticas mapeadas de mensagens de erro |
+| `src/lib/source-scan.ts` | Varredura do fonte original (strip de comentários/strings, `#include` obrigatório) |
 | `src/routes/index.tsx` | UI principal: editor, variáveis, console, controles |
 | `src/routes/__root.tsx` | Root route (sem SSR — apenas `<Outlet />`) |
 | `src/router.tsx` | `createRouter` com `basepath: "/logica-passo-a-passo"` |
@@ -58,6 +59,23 @@ então o working tree não fica sujo após o deploy.
   as linhas — sem isso a flag `m` é necessária mas estava faltando.
 - **Tipos compostos**: `unsigned long`, `signed int`, etc. — o `declRe` em
   `findUndeclaredUsages` usa `(?:unsigned|signed|long\s+)*` como prefixo opcional.
+- **As checagens de `#include` recebem o fonte ORIGINAL**, nunca o pré-processado:
+  o `preprocessArduinoSerial` converte `Serial.print` em `printf`, o que acusaria
+  falta de `<stdio.h>` em todo sketch Arduino. É isso — e não um filtro por modo —
+  que protege os sketches; o aviso roda nos dois modos de propósito.
+- **Ler `#include` sem `stripStrings`**: em `#include "stdio.h"` (forma válida em C)
+  o nome está entre aspas e seria apagado junto com as strings. `collectIncludes`
+  usa só `stripComments`; a âncora `^` da regex é o que evita confundir um
+  `printf("#include <x>")` com diretiva de verdade.
+- **`findMalformedIncludes` roda antes do `tokenize`**: um `include` sem `#` vira
+  expressão solta e o parser morre com "Token inesperado", que não ajuda o aluno.
+  Fica junto do `checkBraceBalance`, antes de qualquer parsing.
+- **`KNOWN_HEADERS` precisa listar bibliotecas de terceiros parecidas com as
+  padrão**: `Timer.h` estava sendo acusado de ser `time.h` digitado errado (uma
+  letra a mais), bloqueando sketches legítimos. Caso novo → acrescentar à lista.
+- **Ordem das regras em `error-hints.ts`**: a primeira que casar vence. A regra de
+  biblioteca ausente precisa vir antes das regras genéricas `/printf/i` e `/scanf/i`,
+  que casariam com o nome da função citado na mensagem.
 - **Basepath**: o `createRouter` tem `basepath: "/logica-passo-a-passo"` e o Vite
   tem `base: "/logica-passo-a-passo/"`. Ambos são necessários — sem um deles ou a
   página fica em branco ou o roteador mostra 404.
