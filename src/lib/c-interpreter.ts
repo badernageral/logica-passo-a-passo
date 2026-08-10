@@ -182,6 +182,9 @@ export class CInterpreter {
   constructor(
     public source: string,
     msPerLoop = 100,
+    // strictEscapes: usado pelo dry-run do modo C (live-check.ts) para acusar
+    // escapes desconhecidos como o gcc faria. A execução normal não ativa.
+    private opts: { strictEscapes?: boolean } = {},
   ) {
     this.state = {
       variables: [],
@@ -243,7 +246,7 @@ export class CInterpreter {
         );
       }
 
-      const toks = tokenize(preprocessed, directives);
+      const toks = tokenize(preprocessed, directives, this.opts);
       const parser = new Parser(toks);
       const { fns, globals } = parser.parseProgram();
       for (const f of fns) this.fns[f.name] = f;

@@ -41,7 +41,18 @@ export const KEYWORDS = new Set([
   "scanf",
 ]);
 
-export function tokenize(src: string, directives?: Directive[]): Tok[] {
+// Escapes válidos em C (\n, \t, \r, \a, \b, \f, \v, octais, \x, \', \", \?, \\).
+// Usado apenas no modo estrito: a tokenização normal continua permissiva para
+// não mudar o comportamento de código que hoje executa.
+const VALID_ESCAPE_RE = /[ntrabfv0-7x'"?\\]/;
+
+export interface TokenizeOpts {
+  // Acusa sequências de escape desconhecidas (ex.: '\m') como erro, espelhando
+  // o gcc com -Werror. Ativado só pelo dry-run do modo Linguagem C.
+  strictEscapes?: boolean;
+}
+
+export function tokenize(src: string, directives?: Directive[], opts?: TokenizeOpts): Tok[] {
   const toks: Tok[] = [];
   let i = 0,
     line = 1,
@@ -120,6 +131,9 @@ export function tokenize(src: string, directives?: Directive[]): Tok[] {
       while (i < src.length && src[i] !== '"') {
         if (src[i] === "\\" && i + 1 < src.length) {
           const n = src[i + 1];
+          if (opts?.strictEscapes && !VALID_ESCAPE_RE.test(n)) {
+            throw new Error(`Sequência de escape desconhecida: '\\${n}' na linha ${line}`);
+          }
           s += n === "n" ? "\n" : n === "t" ? "\t" : n === "\\" ? "\\" : n === '"' ? '"' : n;
           i += 2;
         } else {
@@ -137,7 +151,11 @@ export function tokenize(src: string, directives?: Directive[]): Tok[] {
       i++;
       let ch = "";
       if (src[i] === "\\") {
-        ch = src[i + 1] === "n" ? "\n" : src[i + 1];
+        const n = src[i + 1];
+        if (opts?.strictEscapes && !VALID_ESCAPE_RE.test(n)) {
+          throw new Error(`Sequência de escape desconhecida: '\\${n}' na linha ${line}`);
+        }
+        ch = n === "n" ? "\n" : n;
         i += 2;
       } else {
         ch = src[i];

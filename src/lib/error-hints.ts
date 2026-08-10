@@ -106,6 +106,11 @@ const RULES: HintRule[] = [
       `Você tentou dividir um número por zero, o que é matematicamente indefinido. Antes de dividir, verifique se o divisor é diferente de zero (ex.: 'if (b != 0) { ... }').`,
   },
   {
+    test: /Sequência de escape desconhecida: '\\(.+?)'/i,
+    hint: (m) =>
+      `Dentro de um texto, a barra invertida '\\' inicia uma sequência especial — e '\\${m[1]}' não é uma delas. As mais comuns são: \\n (pular linha), \\t (tabulação), \\" (aspas dentro do texto) e \\\\ (a própria barra). Se você queria escrever uma barra de verdade, use '\\\\'.`,
+  },
+  {
     test: /String não terminada|aspas/i,
     hint: () =>
       `Uma string (texto entre aspas) não foi fechada corretamente. Toda " precisa de outra " no final, na mesma linha.`,

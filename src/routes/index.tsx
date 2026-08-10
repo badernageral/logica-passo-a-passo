@@ -21,6 +21,7 @@ import { Input } from "@/components/ui/input";
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@/components/ui/resizable";
 import { ThemeSwitcher } from "@/components/ThemeSwitcher";
 import { analyzeCode } from "@/lib/code-warnings";
+import { liveCheck, type LiveError } from "@/lib/live-check";
 import { PinInputPanel, type PinInputConfig } from "@/components/PinInputPanel";
 
 export const Route = createFileRoute("/")({
@@ -231,6 +232,18 @@ function Index() {
     [code, interp, sampleType],
   );
 
+  // Dry-run do parser enquanto o aluno digita — somente modo Linguagem C.
+  // O debounce evita acusar erro a cada tecla no meio de uma palavra.
+  const [liveError, setLiveError] = useState<LiveError | null>(null);
+  useEffect(() => {
+    if (interp || sampleType !== "c") {
+      setLiveError(null);
+      return;
+    }
+    const t = setTimeout(() => setLiveError(liveCheck(code)), 700);
+    return () => clearTimeout(t);
+  }, [code, interp, sampleType]);
+
   return (
     <main className="flex h-screen w-screen flex-col p-2 md:p-3">
       <header className="mb-2 w-full">
@@ -438,7 +451,19 @@ function Index() {
                   💡 Dicas pedagógicas
                 </div>
                 <div className="flex-1 overflow-auto pr-1 space-y-2">
-                  {warnings.length === 0 ? (
+                  {liveError && (
+                    <div className="chalk-text rounded-md border border-destructive/60 bg-destructive/10 p-3 text-sm text-destructive">
+                      ⛔{" "}
+                      {liveError.line && (
+                        <>
+                          <strong>Linha {liveError.line}:</strong>{" "}
+                        </>
+                      )}
+                      {liveError.message}
+                      {liveError.hint && <p className="mt-2 opacity-90">💡 {liveError.hint}</p>}
+                    </div>
+                  )}
+                  {warnings.length === 0 && !liveError ? (
                     <p className="chalk-text text-muted-foreground">
                       Nenhum aviso encontrado. Seu código parece estar bem escrito! Inicie a
                       execução para ver as variáveis e a saída.
