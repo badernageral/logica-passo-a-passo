@@ -61,4 +61,19 @@ describe("getErrorHint", () => {
   it("dá dica para setup ausente (Arduino)", () => {
     expect(getErrorHint("Função 'setup' não encontrada.")).toBeTruthy();
   });
+
+  it("explica ';' no lugar da vírgula antes da dica genérica de ')'", () => {
+    const hint = getErrorHint("Esperado ')' mas encontrado ';' (linha 4)");
+    expect(hint).toMatch(/VÍRGULA/);
+    expect(hint).not.toMatch(/Faltou fechar/);
+  });
+
+  it("aponta separador faltando quando aparece um nome no lugar do ')'", () => {
+    const hint = getErrorHint("Esperado ')' mas encontrado 'idade' (linha 3)");
+    expect(hint).toMatch(/separador antes de 'idade'/);
+  });
+
+  it("mantém a dica genérica para outros erros de ')'", () => {
+    expect(getErrorHint("Esperado ')' mas encontrado '}' (linha 4)")).toMatch(/Faltou fechar/);
+  });
 });

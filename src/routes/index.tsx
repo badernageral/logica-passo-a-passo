@@ -50,7 +50,6 @@ void loop() {
 }`;
 
 const SAMPLE_C = `#include <stdio.h>
-
 int main() {
 \tprintf("Olá, mundo!\\n");
 }`;
@@ -243,6 +242,11 @@ function Index() {
     const t = setTimeout(() => setLiveError(liveCheck(code)), 700);
     return () => clearTimeout(t);
   }, [code, interp, sampleType]);
+
+  // Quando a análise estática já explica a mesma linha, o erro do parser vira
+  // repetição — o card do analyzeCode é sempre o mais específico dos dois.
+  const shownLiveError =
+    liveError && warnings.some((w) => w.line === liveError.line) ? null : liveError;
 
   return (
     <main className="flex h-screen w-screen flex-col p-2 md:p-3">
@@ -451,19 +455,21 @@ function Index() {
                   💡 Dicas pedagógicas
                 </div>
                 <div className="flex-1 overflow-auto pr-1 space-y-2">
-                  {liveError && (
+                  {shownLiveError && (
                     <div className="chalk-text rounded-md border border-destructive/60 bg-destructive/10 p-3 text-sm text-destructive">
                       ⛔{" "}
-                      {liveError.line && (
+                      {shownLiveError.line && (
                         <>
-                          <strong>Linha {liveError.line}:</strong>{" "}
+                          <strong>Linha {shownLiveError.line}:</strong>{" "}
                         </>
                       )}
-                      {liveError.message}
-                      {liveError.hint && <p className="mt-2 opacity-90">💡 {liveError.hint}</p>}
+                      {shownLiveError.message}
+                      {shownLiveError.hint && (
+                        <p className="mt-2 opacity-90">💡 {shownLiveError.hint}</p>
+                      )}
                     </div>
                   )}
-                  {warnings.length === 0 && !liveError ? (
+                  {warnings.length === 0 && !shownLiveError ? (
                     <p className="chalk-text text-muted-foreground">
                       Nenhum aviso encontrado. Seu código parece estar bem escrito! Inicie a
                       execução para ver as variáveis e a saída.

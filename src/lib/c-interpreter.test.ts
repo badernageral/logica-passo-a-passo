@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { CInterpreter } from "./c-interpreter";
+import { CInterpreter, type Variable } from "./c-interpreter";
 
 /**
  * Executa um programa do início ao fim, avançando passo a passo.
@@ -53,6 +53,22 @@ describe("Linguagem C — básico", () => {
 
   it("imprime caractere com %c", () => {
     expect(out(`#include <stdio.h>\nint main(){ char c = 'A'; printf("%c", c); }`)).toBe("A");
+  });
+
+  it("respeita a precisão do formato (%.2f)", () => {
+    expect(out(`#include <stdio.h>\nint main(){ float m = 8.456; printf("%.2f", m); }`)).toBe(
+      "8.46",
+    );
+  });
+
+  it("respeita largura e alinhamento (%5d, %-5d)", () => {
+    expect(out(`#include <stdio.h>\nint main(){ printf("[%5d][%-5d]", 42, 42); }`)).toBe(
+      "[   42][42   ]",
+    );
+  });
+
+  it("imprime porcentagem com %%", () => {
+    expect(out(`#include <stdio.h>\nint main(){ printf("%d%%", 50); }`)).toBe("50%");
   });
 });
 
@@ -128,6 +144,63 @@ describe("Linguagem C — funções", () => {
   });
 });
 
+describe("Linguagem C — funções de <math.h>", () => {
+  /** Envolve a expressão num programa completo com as bibliotecas necessárias. */
+  const math = (expr: string, fmt = "%.2f") =>
+    out(`#include <stdio.h>\n#include <math.h>\nint main(){ printf("${fmt}", ${expr}); }`);
+
+  it("floor e ceil arredondam para baixo e para cima", () => {
+    expect(math("floor(2.7)")).toBe("2.00");
+    expect(math("ceil(2.1)")).toBe("3.00");
+    expect(math("floor(-2.1)")).toBe("-3.00");
+    expect(math("ceil(-2.7)")).toBe("-2.00");
+  });
+
+  it("o resultado pode ser guardado numa variável", () => {
+    const src = `#include <stdio.h>\n#include <math.h>\nint main(){ float x = 7.8; int p = floor(x); printf("%d", p); }`;
+    expect(out(src)).toBe("7");
+  });
+
+  it("sqrt, pow e fabs", () => {
+    expect(math("sqrt(9)")).toBe("3.00");
+    expect(math("pow(2, 10)")).toBe("1024.00");
+    expect(math("fabs(-4.5)")).toBe("4.50");
+  });
+
+  it("round arredonda o empate para longe do zero, como no C", () => {
+    expect(math("round(2.5)")).toBe("3.00");
+    expect(math("round(-2.5)")).toBe("-3.00");
+  });
+
+  it("fmod, log10 e trigonometria", () => {
+    expect(math("fmod(7, 3)")).toBe("1.00");
+    expect(math("log10(1000)")).toBe("3.00");
+    expect(math("sin(0)")).toBe("0.00");
+  });
+
+  it("aceita expressões e chamadas aninhadas como argumento", () => {
+    const src = `#include <stdio.h>\n#include <math.h>\nint main(){ int n = 5; printf("%.0f", floor(sqrt(n * 5) + 0.9)); }`;
+    expect(out(src)).toBe("5");
+  });
+
+  it("uma função do aluno com o mesmo nome tem precedência", () => {
+    const src = `#include <stdio.h>\n#include <math.h>\nint floor(int x){ return 99; } int main(){ printf("%d", floor(2.7)); }`;
+    expect(out(src)).toBe("99");
+  });
+
+  it("reclama quando faltam argumentos", () => {
+    const src = `#include <stdio.h>\n#include <math.h>\nint main(){ printf("%.2f", pow(2)); }`;
+    expect(run(src).state.error).toBe("A função 'pow' precisa de 2 argumentos.");
+  });
+});
+
+describe("Arduino — funções auxiliares", () => {
+  it("map, constrain, min, max e abs", () => {
+    const src = `#include <stdio.h>\nint main(){ printf("%d %d %d %d %d", map(512, 0, 1023, 0, 255), constrain(15, 0, 10), min(3, 7), max(3, 7), abs(-8)); }`;
+    expect(out(src)).toBe("127 10 3 7 8");
+  });
+});
+
 describe("Linguagem C — arrays", () => {
   it("lê e escreve elementos de vetor", () => {
     const src = `#include <stdio.h>\nint main(){ int v[3]; v[0] = 10; v[1] = 20; v[2] = 30; printf("%d", v[1]); }`;
@@ -139,6 +212,35 @@ describe("Linguagem C — entrada (scanf)", () => {
   it("lê um inteiro e usa no cálculo", () => {
     const src = `#include <stdio.h>\nint main(){ int n; scanf("%d", &n); printf("%d", n * 2); }`;
     expect(out(src, ["21"])).toBe("42");
+  });
+
+  it("scanf com formato de outro tipo não executa", () => {
+    const src = `#include <stdio.h>\nint main(){ float a; scanf("%d", &a); }`;
+    expect(run(src, ["2"]).state.error).toMatch(/'%d'.*'a'.*float/);
+  });
+
+  it("scanf confere o formato de cada alvo separadamente", () => {
+    const ok = `#include <stdio.h>\nint main(){ int a; float b; scanf("%d %f", &a, &b); printf("%d %.1f", a, b); }`;
+    expect(out(ok, ["7", "2.5"])).toBe("7 2.5");
+    const bad = `#include <stdio.h>\nint main(){ int a; float b; scanf("%d %d", &a, &b); }`;
+    expect(run(bad, ["7", "2"]).state.error).toMatch(/'b'/);
+  });
+
+  it("scanf sem '&' não executa e explica o motivo", () => {
+    const src = `#include <stdio.h>\nint main(){ float a; scanf("%f", a); }`;
+    expect(run(src, ["2.5"]).state.error).toMatch(/Faltou o '&' antes de 'a'/);
+  });
+
+  it("vetor de char com %s é lido sem '&'", () => {
+    const src = `#include <stdio.h>\nint main(){ char nome[20]; scanf("%s", nome); }`;
+    expect(run(src, ["Ana"]).state.error).toBeFalsy();
+  });
+
+  it("posição de vetor exige o '&', como em C", () => {
+    const ok = `#include <stdio.h>\nint main(){ int v[3]; scanf("%d", &v[0]); printf("%d", v[0]); }`;
+    expect(out(ok, ["7"])).toBe("7");
+    const bad = `#include <stdio.h>\nint main(){ int v[3]; scanf("%d", v[0]); }`;
+    expect(run(bad, ["7"]).state.error).toMatch(/Faltou o '&'/);
   });
 
   it("lê duas variáveis em scanfs consecutivos", () => {
@@ -200,6 +302,16 @@ describe("Erros são reportados, não lançam", () => {
   it("variável não declarada gera state.error", () => {
     const { state } = run(`int main(){ x = 5; }`);
     expect(state.error).toBeTruthy();
+  });
+
+  it("'main' digitado errado é apontado como erro de digitação", () => {
+    const interp = new CInterpreter(`#include <stdio.h>\nint mian(){ printf("oi"); }`);
+    expect(interp.state.error).toMatch(/'mian'.*'main'/);
+  });
+
+  it("sem nenhum ponto de entrada, a mensagem cita main e setup/loop", () => {
+    const interp = new CInterpreter(`#include <stdio.h>\nint soma(int a){ return a; }`);
+    expect(interp.state.error).toMatch(/setup.*main|main.*setup/);
   });
 });
 
@@ -292,5 +404,77 @@ describe("Criação de variáveis passo a passo (regressão do commit c275cec)",
     expect(serial.trim()).toBe("3");
     expect(varValue(interp, "a")).toBe(1);
     expect(varValue(interp, "b")).toBe(2);
+  });
+});
+
+describe("Variáveis sem valor inicial", () => {
+  /**
+   * Último estado de uma variável enquanto ela existiu — as locais são descartadas
+   * quando a função retorna, então não dá para inspecioná-las no fim da execução.
+   */
+  function track(src: string, name: string, inputs: string[] = [], maxSteps = 2000) {
+    const interp = new CInterpreter(src);
+    let last: Variable | undefined;
+    let steps = 0;
+    let inputIdx = 0;
+    while (!interp.state.finished && !interp.state.error && steps < maxSteps) {
+      if (interp.state.awaitingInput) interp.provideInput(inputs[inputIdx++] ?? "0");
+      else interp.step();
+      const v = interp.state.variables.find((vv) => vv.name === name);
+      if (v) last = { ...v };
+      steps++;
+    }
+    return last;
+  }
+
+  it("declaração sem inicializador marca a variável como sem valor", () => {
+    expect(track(`#include <stdio.h>\nint main(){ int x; return 0; }`, "x")?.uninit).toBe(true);
+  });
+
+  it("declaração com inicializador não é marcada", () => {
+    expect(track(`#include <stdio.h>\nint main(){ int x = 5; return 0; }`, "x")?.uninit).toBe(
+      false,
+    );
+  });
+
+  it("a marcação some após a primeira atribuição", () => {
+    const v = track(`#include <stdio.h>\nint main(){ int x; x = 3; return 0; }`, "x");
+    expect(v?.uninit).toBe(false);
+    expect(v?.value).toBe(3);
+  });
+
+  it("scanf também tira a marcação", () => {
+    const v = track(`#include <stdio.h>\nint main(){ int x; scanf("%d", &x); return 0; }`, "x", [
+      "9",
+    ]);
+    expect(v?.uninit).toBe(false);
+    expect(v?.value).toBe(9);
+  });
+
+  it("parâmetro de função recebe o argumento e não fica sem valor", () => {
+    const v = track(
+      `#include <stdio.h>\nint dobro(int n){ return n * 2; }\nint main(){ printf("%d", dobro(4)); }`,
+      "n",
+    );
+    expect(v?.uninit).toBeFalsy();
+    expect(v?.value).toBe(4);
+  });
+
+  it("vetor sem inicializador tem as células ainda não escritas sem valor", () => {
+    const v = track(`#include <stdio.h>\nint main(){ int v[3]; v[1] = 8; return 0; }`, "v");
+    expect(v?.uninitCells).toEqual([true, false, true]);
+  });
+
+  it("inicializador parcial zera o resto (nenhuma célula fica sem valor)", () => {
+    const v = track(`#include <stdio.h>\nint main(){ int v[3] = {1, 2}; return 0; }`, "v");
+    expect(v?.uninitCells).toBeUndefined();
+  });
+
+  it("matriz sem inicializador marca só a célula escrita como preenchida", () => {
+    const v = track(`#include <stdio.h>\nint main(){ int m[2][2]; m[0][1] = 7; return 0; }`, "m");
+    expect(v?.uninitCells).toEqual([
+      [true, false],
+      [true, true],
+    ]);
   });
 });

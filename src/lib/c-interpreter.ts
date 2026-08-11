@@ -4,7 +4,7 @@
  *  - Tipos: int, float, double, char
  *  - Declaração com/sem inicialização: int x = 5;  float a, b = 2.0;
  *  - Atribuições e expressões aritméticas (+ - * / %), comparações (== != < > <= >=), lógicos (&& || !)
- *  - printf("...", args)  com %d %f %lf %c %s e \n
+ *  - printf("...", args)  com %d %i %u %f %e %g %x %o %c %s, flags/largura/precisão (%.2f, %-5d) e \n
  *  - scanf("...", &var)  (uma variável por chamada para simplicidade didática)
  *  - if / else  com blocos { }
  *  - while ( ... ) { ... }
@@ -43,7 +43,16 @@ import {
   preprocessStructMemberAccess,
   checkBraceBalance,
 } from "./interpreter-preprocess";
-import { findMalformedIncludes, findMissingIncludes, findUnknownIncludes } from "./source-scan";
+import {
+  findMalformedIncludes,
+  findMissingIncludes,
+  findUnknownIncludes,
+  withinOneEdit,
+  isAnagram,
+} from "./source-scan";
+import { formatPrintf } from "./printf-format";
+import { BUILTIN_FUNCTIONS } from "./c-builtins";
+import { formatMismatch, kindOfType } from "./format-types";
 
 // Re-exporta os tipos públicos para manter a API de importação estável.
 export type {
@@ -331,7 +340,16 @@ export class CInterpreter {
         this.pushFunctionCall("main", []);
       } else {
         if (globals.length === 0) {
-          throw new Error("Nenhuma função 'setup'/'loop' (Arduino) nem 'main' (C) encontrada.");
+          // Nome parecido com 'main' quase sempre é erro de digitação — apontar
+          // isso ajuda muito mais que dizer que nenhum ponto de entrada existe.
+          const typo = Object.keys(this.fns).find(
+            (n) => withinOneEdit(n.toLowerCase(), "main") || isAnagram(n.toLowerCase(), "main"),
+          );
+          throw new Error(
+            typo
+              ? `A função '${typo}' está escrita diferente de 'main'. Todo programa em C começa pela função 'main' — corrija para 'int main()'.`
+              : "Nenhuma função 'setup'/'loop' (Arduino) nem 'main' (C) encontrada.",
+          );
         }
       }
 
@@ -384,6 +402,7 @@ export class CInterpreter {
       );
     }
     v.value = this.coerce(v.type, value);
+    v.uninit = false;
     v.justChanged = true;
   }
 
@@ -406,8 +425,10 @@ export class CInterpreter {
     const coerced = this.coerce(v.type, value);
     if (v.dims.length === 1) {
       (v.value as (number | string)[])[idxs[0]] = coerced;
+      if (v.uninitCells) (v.uninitCells as boolean[])[idxs[0]] = false;
     } else {
       (v.value as (number | string)[][])[idxs[0]][idxs[1]] = coerced;
+      if (v.uninitCells) (v.uninitCells as boolean[][])[idxs[0]][idxs[1]] = false;
     }
     v.justChanged = true;
     v.lastIndex = idxs.slice();
@@ -443,12 +464,17 @@ export class CInterpreter {
     if (it.dims && it.dims.length > 0) {
       const zero = type === "char" ? "" : 0;
       let value: (number | string)[] | (number | string)[][];
+      // Em C, um inicializador parcial ({1, 2}) zera as demais posições — então só
+      // marcamos como "sem valor" o vetor/matriz declarado sem inicializador nenhum.
+      let uninitCells: boolean[] | boolean[][] | undefined;
       if (it.dims.length === 1) {
         const arr: (number | string)[] = new Array(it.dims[0]).fill(zero);
         if (it.arrayInit) {
           const src = it.arrayInit as (number | string)[];
           for (let i = 0; i < Math.min(src.length, arr.length); i++)
             arr[i] = this.coerce(type, src[i]);
+        } else {
+          uninitCells = new Array(it.dims[0]).fill(true);
         }
         value = arr;
       } else {
@@ -461,13 +487,30 @@ export class CInterpreter {
               mat[i][j] = this.coerce(type, src[i][j]);
             }
           }
+        } else {
+          uninitCells = Array.from({ length: r }, () => new Array(c).fill(true));
         }
         value = mat;
       }
-      return { name: it.name, type, value, scope, dims: it.dims.slice(), justCreated };
+      return {
+        name: it.name,
+        type,
+        value,
+        scope,
+        dims: it.dims.slice(),
+        justCreated,
+        uninitCells,
+      };
     }
     const val = it.init ? this.evalExpr(it.init, scope) : 0;
-    return { name: it.name, type, value: this.coerce(type, val), scope, justCreated };
+    return {
+      name: it.name,
+      type,
+      value: this.coerce(type, val),
+      scope,
+      justCreated,
+      uninit: !it.init,
+    };
   }
 
   private coerce(type: CType, val: number | string): number | string {
@@ -744,11 +787,31 @@ export class CInterpreter {
         }
         // chamada de função síncrona (sem step-by-step interno; resultado imediato)
         const fn = this.fns[e.name];
-        if (!fn) throw new Error(`Função '${e.name}' não definida.`);
-        const args = e.args.map((a) => this.evalExpr(a, scope));
-        return this.callFunctionSync(fn, args);
+        if (fn) {
+          const args = e.args.map((a) => this.evalExpr(a, scope));
+          return this.callFunctionSync(fn, args);
+        }
+        // Funções de biblioteca (math.h e afins). Uma função do aluno com o mesmo
+        // nome tem precedência — por isso a busca acima vem primeiro.
+        const builtin = BUILTIN_FUNCTIONS[e.name];
+        if (builtin) {
+          if (e.args.length < builtin.arity) {
+            const plural = builtin.arity === 1 ? "argumento" : "argumentos";
+            throw new Error(`A função '${e.name}' precisa de ${builtin.arity} ${plural}.`);
+          }
+          const nums = e.args.map((a) => this.toNumber(this.evalExpr(a, scope)));
+          return builtin.fn(nums);
+        }
+        throw new Error(`Função '${e.name}' não definida.`);
       }
     }
+  }
+
+  /** Valor numérico de um argumento — um `char` vale o seu código ASCII. */
+  private toNumber(v: number | string): number {
+    if (typeof v === "number") return v;
+    const n = parseFloat(v);
+    return Number.isNaN(n) ? (v.length > 0 ? v.charCodeAt(0) : 0) : n;
   }
 
   private truthy(v: number | string): boolean {
@@ -874,26 +937,11 @@ export class CInterpreter {
   }
 
   private doPrintf(s: Extract<Stmt, { k: "printf" }>, scope: string): string {
-    let out = "";
     let ai = 0;
-    const fmt = s.fmt;
-    for (let i = 0; i < fmt.length; i++) {
-      if (fmt[i] === "%" && i + 1 < fmt.length) {
-        const next = fmt[i + 1];
-        const arg = s.args[ai++];
-        const val = arg !== undefined ? this.evalExpr(arg, scope) : "";
-        if (next === "d") out += String(Math.trunc(Number(val)));
-        else if (next === "f") out += Number(val).toFixed(6);
-        else if (next === "l" && fmt[i + 2] === "f") {
-          out += Number(val).toFixed(6);
-          i++;
-        } else if (next === "c")
-          out += typeof val === "string" ? val : String.fromCharCode(Number(val));
-        else if (next === "s") out += String(val);
-        else out += "%" + next;
-        i++;
-      } else out += fmt[i];
-    }
+    const out = formatPrintf(s.fmt, () => {
+      const arg = s.args[ai++];
+      return arg !== undefined ? this.evalExpr(arg, scope) : "";
+    });
     // dividir em linhas para o console — preserva quebras
     const lines = out.split("\n");
     lines.forEach((ln, idx) => {
@@ -1337,6 +1385,20 @@ export class CInterpreter {
         const tgt = s.targets[0];
         const v = this.findVar(tgt.name, scope);
         if (!v) throw new Error(`Variável '${tgt.name}' não declarada (scanf).`);
+        // Sem o '&', o scanf recebe o VALOR e não teria onde guardar a leitura.
+        // A exceção é o nome de um vetor, que já é o endereço do primeiro item.
+        if (!tgt.byAddress && !(v.dims && !tgt.indices)) {
+          throw new Error(
+            `Faltou o '&' antes de '${tgt.name}' no scanf da linha ${s.line}. O scanf precisa do ENDEREÇO da variável para guardar o valor lido: scanf("...", &${tgt.name});`,
+          );
+        }
+        // O scanf escreve na memória da variável: um formato de outro tipo
+        // guardaria o valor errado (aqui o tipo do alvo é conhecido de verdade).
+        if (tgt.spec) {
+          const kind = kindOfType(v.type, !!v.dims && !tgt.indices);
+          const problem = kind && formatMismatch(tgt.spec, kind, tgt.name, v.type, "scanf");
+          if (problem) throw new Error(`${problem} (linha ${s.line})`);
+        }
         if (s.targets.length > 1) {
           const rest: Stmt = { k: "scanf", fmt: s.fmt, targets: s.targets.slice(1), line: s.line };
           this.stack.push({ kind: "stmt", stmt: rest, scope });
@@ -1549,6 +1611,7 @@ export class CInterpreter {
         this.setIndexed(varName, scope ?? v.scope, indices, val);
       } else {
         v.value = this.coerce(type, val);
+        v.uninit = false;
         v.justChanged = true;
       }
     } catch (e) {

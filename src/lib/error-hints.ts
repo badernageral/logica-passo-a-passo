@@ -46,6 +46,20 @@ const RULES: HintRule[] = [
       `Faltou abrir parênteses '('. Estruturas como if, while, for e chamadas de função sempre exigem parênteses. Exemplo: 'if (x > 0) { ... }'.`,
   },
   {
+    // Precisa vir antes da regra geral de ')': aqui o parêntese existe, o que
+    // está errado é o separador dos argumentos.
+    test: /Esperado '\)' mas encontrado ';'/i,
+    hint: () =>
+      `Dentro dos parênteses de uma função, os argumentos são separados por VÍRGULA, não por ponto-e-vírgula. O ';' só aparece no fim da instrução: scanf("%d", &a);`,
+  },
+  {
+    // Também antes da regra geral: achar um nome/número onde deveria vir ')'
+    // quase sempre é separador faltando, não parêntese aberto.
+    test: /Esperado '\)' mas encontrado '([A-Za-z_]\w*|&|\d[\w.]*)'/i,
+    hint: (m) =>
+      `Faltou um separador antes de '${m[1]}'. Numa chamada, os argumentos são separados por vírgula — ex.: printf("Idade: %d\\n", idade). Numa expressão, o que falta é um operador (+, -, *, /).`,
+  },
+  {
     test: /Esperado '\)'/i,
     hint: () =>
       `Faltou fechar parênteses ')'. Confira se cada '(' tem um ')' correspondente na mesma expressão.`,

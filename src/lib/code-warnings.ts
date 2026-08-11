@@ -11,7 +11,12 @@ import {
   findUnknownIncludes,
   findMalformedIncludes,
   isIncludeLine,
+  LIBRARY_FUNCTIONS,
+  withinOneEdit,
+  isAnagram,
 } from "./source-scan";
+import { BUILTIN_NAMES } from "./c-builtins";
+import { conversionsOf, formatMismatch, kindOfType } from "./format-types";
 
 export interface CodeWarning {
   line: number;
@@ -229,12 +234,276 @@ export function analyzeCode(code: string, mode: "arduino" | "c" = "arduino"): Co
     }
   }
 
-  // 8) Variáveis usadas sem declaração prévia. Funções já apontadas acima são
+  // 8) Separadores de argumentos: ';' no lugar da ',' e vírgula ausente.
+  warnings.push(...findSemicolonInArgs(cleaned));
+  warnings.push(...findMissingComma(stripComments(code)));
+
+  // 9) scanf sem o '&' antes da variável.
+  warnings.push(...findScanfWithoutAddress(stripComments(code)));
+
+  // 10) Identificador de formato incompatível com o tipo declarado.
+  warnings.push(...findFormatTypeMismatch(stripComments(code), cleaned));
+
+  // 11) C: falta a função main — inclusive quando o nome só está digitado errado.
+  if (mode === "c") warnings.push(...findMissingEntryPoint(cleaned));
+
+  // 12) Variáveis usadas sem declaração prévia. Funções já apontadas acima são
   // puladas para o aluno não receber dois avisos sobre o mesmo nome.
   warnings.push(...findUndeclaredUsages(cleaned, new Set(missingIncludes.map((mi) => mi.fn))));
 
   // Limita a quantidade exibida para não poluir
   return warnings.slice(0, 8);
+}
+
+// ── Ponto-e-vírgula no lugar da vírgula ───────────────────────
+
+/**
+ * Acha `;` dentro dos parênteses de uma chamada, como em `scanf("%d";&a)`.
+ * O parser já morre nesse caso, mas com a mensagem "Esperado ')'" — e só ao
+ * executar (ou, no modo C, no dry-run). Aqui o aluno vê o problema real
+ * enquanto digita, nos dois modos.
+ *
+ * O `for (i = 0; i < n; i++)` é a exceção legítima: seus ';' separam as três
+ * partes do laço. A dispensa vale só para o parêntese do próprio `for` — um ';'
+ * mais fundo, como em `for (i = f(a;b); ...)`, continua sendo erro.
+ */
+function findSemicolonInArgs(cleaned: string): CodeWarning[] {
+  const out: CodeWarning[] = [];
+  // Pilha com um item por '(' aberto: o nome que veio antes dele ("" se nenhum).
+  const open: string[] = [];
+  let line = 1;
+  for (let i = 0; i < cleaned.length; i++) {
+    const ch = cleaned[i];
+    if (ch === "\n") {
+      line++;
+      continue;
+    }
+    if (ch === "(") {
+      const before = cleaned.slice(0, i).match(/([A-Za-z_]\w*)\s*$/);
+      open.push(before ? before[1] : "");
+      continue;
+    }
+    if (ch === ")") {
+      open.pop();
+      continue;
+    }
+    if (ch === ";" && open.length > 0 && open[open.length - 1] !== "for") {
+      const fn = open[open.length - 1];
+      const exemplo = fn === "scanf" ? `scanf("%d", &a);` : `printf("%d", x);`;
+      out.push({
+        line,
+        severity: "warning",
+        message: `Há um ';' dentro dos parênteses${fn ? ` de '${fn}'` : ""}. Os argumentos são separados por vírgula e o ';' só vem depois do ')' — ex.: ${exemplo}. Confira também se o '(' chegou a ser fechado.`,
+      });
+      break; // um aviso basta: os seguintes costumam ser consequência do mesmo erro
+    }
+  }
+  return out;
+}
+
+// ── Vírgula ausente entre argumentos ──────────────────────────
+
+/** Literal de string, com os escapes tratados (`\"` não fecha a string). */
+const STRING_LITERAL = /"(?:[^"\\\n]|\\.)*"/g;
+
+/**
+ * Acha a vírgula que faltou entre um texto e o resto dos argumentos, como em
+ * `printf("Idade: %d\n"idade)` ou `printf(idade"\n")`.
+ *
+ * Recebe o fonte só sem COMENTÁRIOS: as aspas precisam estar de pé, já que são
+ * elas que delimitam o argumento. Em C, depois de um literal de string só podem
+ * vir ',' ')' ';' ']' '}' ou outro literal (concatenação) — qualquer letra,
+ * dígito ou '&' colado ali é vírgula faltando.
+ */
+function findMissingComma(noComments: string): CodeWarning[] {
+  const out: CodeWarning[] = [];
+  const lines = noComments.split("\n");
+
+  STRING_LITERAL.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = STRING_LITERAL.exec(noComments)) !== null) {
+    const head = noComments.slice(0, m.index);
+    const line = head.split("\n").length;
+    // Diretivas ficam de fora: em `#include "stdio.h"` as aspas são a sintaxe.
+    if (/^\s*#/.test(lines[line - 1] ?? "")) continue;
+
+    // Depois do texto: qualquer letra, dígito ou '&' é vírgula faltando.
+    const afterMissing = /^\s*[A-Za-z_&0-9]/.test(noComments.slice(m.index + m[0].length));
+    // Antes do texto: um identificador que não seja palavra reservada nem o
+    // nome da própria função (`printf(` já é o começo legítimo da chamada).
+    const wordBefore = head.match(/([A-Za-z_]\w*)\s*$/);
+    const beforeMissing =
+      !!wordBefore && !RESERVED.has(wordBefore[1]) && !/[A-Za-z_]\w*\s*\(\s*$/.test(head);
+
+    if (!afterMissing && !beforeMissing) continue;
+    out.push({
+      line,
+      severity: "warning",
+      message: `Faltou a vírgula entre o texto entre aspas e o argumento seguinte. Cada argumento é separado por vírgula — ex.: printf("Idade: %d\\n", idade);`,
+    });
+    break; // o primeiro basta: o parser para aí de qualquer forma
+  }
+  return out;
+}
+
+// ── Identificador de formato x tipo da variável ───────────────
+
+interface DeclaredVar {
+  type: string;
+  isArray: boolean;
+}
+
+/**
+ * Tipo de cada variável declarada no fonte, incluindo parâmetros de função.
+ *
+ * O `[^;{}()]*` para a lista de nomes exclui parênteses de propósito: assim
+ * `void soma(int a, float b)` casa primeiro só com `void soma`, e a varredura
+ * continua de dentro dos parênteses, pegando os parâmetros como declarações.
+ */
+function collectDeclaredVars(cleaned: string): Map<string, DeclaredVar> {
+  const out = new Map<string, DeclaredVar>();
+  const declRe = new RegExp(`\\b((?:unsigned|signed|long)\\s+)*(${TYPE_KW})\\b([^;{}()]*)`, "g");
+  const typeAtStart = new RegExp(`^((?:unsigned|signed|long)\\s+)*(${TYPE_KW})\\b(.*)$`);
+  let m: RegExpExecArray | null;
+  while ((m = declRe.exec(cleaned)) !== null) {
+    let type = ((m[1] ?? "") + m[2]).trim();
+    for (const raw of splitTopLevel(m[3])) {
+      const part = raw.trim();
+      if (!part) continue;
+      // `float a, int b` (parâmetros): o tipo pode mudar no meio da lista.
+      const again = part.match(typeAtStart);
+      const body = again ? ((type = ((again[1] ?? "") + again[2]).trim()), again[3]) : part;
+      const name = body.match(/^\s*\**\s*([A-Za-z_]\w*)/)?.[1];
+      if (!name || out.has(name)) continue;
+      out.set(name, { type, isArray: /^\s*\**\s*[A-Za-z_]\w*\s*\[/.test(body) });
+    }
+  }
+  return out;
+}
+
+/** `printf("fmt", args…)` / `scanf("fmt", args…)` com a lista de argumentos crua. */
+const FORMAT_CALL = /\b(printf|scanf)\s*\(\s*("(?:[^"\\\n]|\\.)*")\s*,([^)]*)\)/g;
+
+/**
+ * Confere se cada `%d`, `%f`, `%c` ou `%s` combina com o tipo da variável
+ * passada naquela posição — `printf("%d", media)` com `media` float é o caso
+ * clássico. Só checa argumentos que são o nome puro de uma variável conhecida;
+ * expressões (`a + b`, chamadas) ficam de fora para não gerar falso alarme.
+ */
+function findFormatTypeMismatch(noComments: string, cleaned: string): CodeWarning[] {
+  const out: CodeWarning[] = [];
+  const vars = collectDeclaredVars(cleaned);
+
+  FORMAT_CALL.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = FORMAT_CALL.exec(noComments)) !== null) {
+    const fn = m[1] as "printf" | "scanf";
+    const convs = conversionsOf(m[2]);
+    if (!convs) continue;
+    const args = splitTopLevel(m[3]);
+    for (let i = 0; i < args.length && i < convs.length; i++) {
+      const name = args[i].trim().replace(/^&/, "");
+      if (!/^[A-Za-z_]\w*$/.test(name)) continue; // só nome puro de variável
+      const decl = vars.get(name);
+      if (!decl) continue;
+      const kind = kindOfType(decl.type, decl.isArray);
+      if (!kind) continue;
+      const problem = formatMismatch(convs[i], kind, name, decl.type, fn);
+      if (!problem) continue;
+      out.push({
+        line: noComments.slice(0, m.index).split("\n").length,
+        severity: "warning",
+        message: problem,
+      });
+      break; // um por chamada basta
+    }
+  }
+  return out;
+}
+
+// ── scanf sem '&' ─────────────────────────────────────────────
+
+/** `scanf("fmt", alvo, alvo…)` — a lista de alvos vem crua, para inspecionar cada um. */
+const SCANF_CALL = /\bscanf\s*\(\s*("(?:[^"\\\n]|\\.)*")\s*,([^)]*)\)/g;
+
+/**
+ * Acha `scanf("%d", a)` — sem o `&`, o scanf recebe uma cópia do valor e não
+ * tem onde guardar o que foi lido. É o erro mais comum do primeiro semestre e
+ * o interpretador o aceitaria em silêncio, já que o `&` é opcional na gramática.
+ *
+ * Duas exceções legítimas, ambas dispensadas aqui: `%s` (o nome de um vetor de
+ * char já é um endereço) e qualquer alvo declarado como vetor no próprio fonte.
+ */
+function findScanfWithoutAddress(noComments: string): CodeWarning[] {
+  const out: CodeWarning[] = [];
+  // Vetores declarados no fonte: `char nome[20];` → não precisam de '&'.
+  const arrays = new Set<string>();
+  const arrayDeclRe = new RegExp(`\\b(?:${TYPE_KW})\\s+([A-Za-z_]\\w*)\\s*\\[`, "g");
+  let am: RegExpExecArray | null;
+  while ((am = arrayDeclRe.exec(noComments)) !== null) arrays.add(am[1]);
+
+  SCANF_CALL.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = SCANF_CALL.exec(noComments)) !== null) {
+    const specs = m[1].match(/%[^%\s]?[diufFeEgGxXoscp]/g) ?? [];
+    const args = m[2].split(",");
+    for (let i = 0; i < args.length; i++) {
+      const arg = args[i].trim();
+      if (!arg || arg.startsWith("&")) continue;
+      if (specs[i]?.endsWith("s")) continue; // %s recebe o vetor, sem '&'
+      const name = arg.match(/^([A-Za-z_]\w*)$/)?.[1];
+      if (name && arrays.has(name)) continue;
+      out.push({
+        line: noComments.slice(0, m.index).split("\n").length,
+        severity: "warning",
+        message: `Faltou o '&' antes de '${arg}' no scanf. O '&' informa o ENDEREÇO da variável — sem ele o scanf não consegue guardar o valor digitado. Escreva: scanf(${m[1]}, &${arg});`,
+      });
+      break; // um alvo por scanf já indica o problema
+    }
+  }
+  return out;
+}
+
+// ── Função de entrada (main) ──────────────────────────────────
+
+/** Definições de função no fonte já limpo: `tipo nome(...) {`. */
+const FN_DEF_RE = /\b(?:[A-Za-z_]\w*[ \t*]+)+([A-Za-z_]\w*)\s*\([^)]*\)\s*\{/g;
+
+/**
+ * Avisa quando o programa em C não tem `main`. Se alguma função definida tiver
+ * nome parecido (`mian`, `mai`, `mainn`), sugere a correção em vez do aviso
+ * genérico — é o erro de digitação mais comum e o mais difícil de enxergar.
+ */
+function findMissingEntryPoint(cleaned: string): CodeWarning[] {
+  const defs: Array<{ name: string; line: number }> = [];
+  let m: RegExpExecArray | null;
+  FN_DEF_RE.lastIndex = 0;
+  while ((m = FN_DEF_RE.exec(cleaned)) !== null) {
+    defs.push({ name: m[1], line: cleaned.slice(0, m.index).split("\n").length });
+  }
+  // Sem nenhuma função ainda, o programa só está começando a ser digitado.
+  if (defs.length === 0 || defs.some((d) => d.name === "main")) return [];
+
+  const typo = defs.find(
+    (d) => withinOneEdit(d.name.toLowerCase(), "main") || isAnagram(d.name.toLowerCase(), "main"),
+  );
+  if (typo) {
+    return [
+      {
+        line: typo.line,
+        severity: "warning",
+        message: `'${typo.name}' está escrito diferente de 'main'. Você quis dizer 'int main()'? É por ela que o programa começa.`,
+      },
+    ];
+  }
+  return [
+    {
+      line: 1,
+      severity: "warning",
+      message:
+        "Nenhuma função 'main' foi encontrada. Todo programa em C começa pela 'int main()' — sem ela nada é executado.",
+    },
+  ];
 }
 
 // ── Análise de identificadores não declarados ─────────────────
@@ -334,9 +603,16 @@ const RESERVED = new Set<string>([
   "write",
   "available",
   "read",
+  // Funções embutidas (math.h etc.) e as demais da biblioteca padrão que a
+  // varredura de #include conhece — vêm das próprias tabelas, para não
+  // divergirem delas com o tempo.
+  ...BUILTIN_NAMES,
+  ...Object.keys(LIBRARY_FUNCTIONS),
 ]);
 
 const KNOWN_FUNCTIONS: string[] = [
+  ...BUILTIN_NAMES,
+  ...Object.keys(LIBRARY_FUNCTIONS),
   "pinMode",
   "digitalWrite",
   "digitalRead",
@@ -374,10 +650,8 @@ const KNOWN_FUNCTIONS: string[] = [
   "read",
 ];
 
-function extractNamesFromDeclList(list: string): string[] {
-  // Recebe a parte após o tipo, ex.: " a, *b, c[10] = {1,2,3}, d = 5"
-  const out: string[] = [];
-  // separa por vírgula no nível 0 (ignorando colchetes/parênteses)
+/** Separa por vírgulas do nível externo, ignorando as de dentro de (), [] e {}. */
+function splitTopLevel(list: string): string[] {
   let depth = 0;
   let buf = "";
   const parts: string[] = [];
@@ -390,7 +664,13 @@ function extractNamesFromDeclList(list: string): string[] {
     } else buf += ch;
   }
   if (buf.trim()) parts.push(buf);
-  for (const p of parts) {
+  return parts;
+}
+
+function extractNamesFromDeclList(list: string): string[] {
+  // Recebe a parte após o tipo, ex.: " a, *b, c[10] = {1,2,3}, d = 5"
+  const out: string[] = [];
+  for (const p of splitTopLevel(list)) {
     // remover inicializador
     const noInit = p.split("=")[0];
     // remover [...] e *
@@ -499,7 +779,8 @@ function findUndeclaredUsages(cleaned: string, skip: Set<string> = new Set()): C
       if (isCall) {
         // checar se existe função conhecida com mesmo nome em outra capitalização
         const lower = name.toLowerCase();
-        const known = KNOWN_FUNCTIONS.find((f) => f.toLowerCase() === lower);
+        // Só é "erro de capitalização" se a grafia correta for diferente da usada.
+        const known = KNOWN_FUNCTIONS.find((f) => f.toLowerCase() === lower && f !== name);
         if (known) {
           result.push({
             line: i + 1,

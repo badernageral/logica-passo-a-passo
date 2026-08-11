@@ -8,6 +8,7 @@ import type {
   ScanfTarget,
   Directive,
 } from "./interpreter-types";
+import { conversionsOf } from "./format-types";
 
 // ---------------- Tokenizer ----------------
 
@@ -627,7 +628,11 @@ export class Parser {
     const targets: ScanfTarget[] = [];
     while (this.match(",")) {
       this.eat(",");
-      if (this.match("&")) this.eat("&");
+      let byAddress = false;
+      if (this.match("&")) {
+        this.eat("&");
+        byAddress = true;
+      }
       const name = this.eat("id").v;
       const indices: Expr[] = [];
       while (this.match("[")) {
@@ -635,10 +640,14 @@ export class Parser {
         indices.push(this.parseExpr());
         this.eat("]");
       }
-      targets.push(indices.length ? { name, indices } : { name });
+      targets.push(indices.length ? { name, indices, byAddress } : { name, byAddress });
     }
     this.eat(")");
     this.eat(";");
+    // Cada alvo carrega a conversão da sua posição: a execução trata um alvo por
+    // vez e, sem isso, perderia a correspondência com o formato.
+    const convs = conversionsOf(fmtTok.v);
+    if (convs) targets.forEach((t, i) => (t.spec = convs[i]));
     return { k: "scanf", fmt: fmtTok.v, targets, line };
   }
 

@@ -249,13 +249,13 @@ const KNOWN_HEADERS = new Set(
 );
 
 /** Verdadeiro se `a` e `b` têm exatamente os mesmos caracteres fora de ordem. */
-function isAnagram(a: string, b: string): boolean {
+export function isAnagram(a: string, b: string): boolean {
   if (a.length !== b.length) return false;
   return [...a].sort().join("") === [...b].sort().join("");
 }
 
 /** Verdadeiro se `a` vira `b` com no máximo uma inserção, remoção ou troca. */
-function withinOneEdit(a: string, b: string): boolean {
+export function withinOneEdit(a: string, b: string): boolean {
   if (Math.abs(a.length - b.length) > 1) return false;
   if (a.length === b.length) {
     let diffs = 0;

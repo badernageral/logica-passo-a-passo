@@ -27,11 +27,18 @@ function formatScalar(type: string, value: number | string, name?: string): stri
   return String(value);
 }
 
+/** Espaço rígido: mantém a altura da linha quando a variável ainda não tem valor. */
+const EMPTY = " ";
+
 export function VariableCard({ v }: { v: Variable }) {
   const color = TYPE_COLORS[v.type] || "var(--chalk-white)";
   const isArray = !!v.dims && v.dims.length > 0;
   const is2D = isArray && v.dims!.length === 2;
-  const display = !isArray ? formatScalar(v.type, v.value as number | string, v.name) : "";
+  const display = isArray
+    ? ""
+    : v.uninit
+      ? EMPTY
+      : formatScalar(v.type, v.value as number | string, v.name);
 
   return (
     <div
@@ -73,6 +80,7 @@ export function VariableCard({ v }: { v: Variable }) {
         <div className="mt-2 flex flex-wrap gap-1">
           {(v.value as (number | string)[]).map((cell, i) => {
             const highlighted = v.lastIndex && v.lastIndex[0] === i && v.justChanged;
+            const empty = (v.uninitCells as boolean[] | undefined)?.[i];
             return (
               <div
                 key={i}
@@ -90,7 +98,7 @@ export function VariableCard({ v }: { v: Variable }) {
                 }}
               >
                 <span className="text-[10px] opacity-60">[{i}]</span>
-                <span className="text-base">{formatScalar(v.type, cell)}</span>
+                <span className="text-base">{empty ? EMPTY : formatScalar(v.type, cell)}</span>
               </div>
             );
           })}
@@ -105,6 +113,7 @@ export function VariableCard({ v }: { v: Variable }) {
                   {row.map((cell, j) => {
                     const highlighted =
                       v.lastIndex && v.lastIndex[0] === i && v.lastIndex[1] === j && v.justChanged;
+                    const empty = (v.uninitCells as boolean[][] | undefined)?.[i]?.[j];
                     return (
                       <td
                         key={j}
@@ -123,7 +132,7 @@ export function VariableCard({ v }: { v: Variable }) {
                         }}
                         title={`[${i}][${j}]`}
                       >
-                        {formatScalar(v.type, cell)}
+                        {empty ? EMPTY : formatScalar(v.type, cell)}
                       </td>
                     );
                   })}

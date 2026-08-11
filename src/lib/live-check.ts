@@ -22,6 +22,8 @@ export interface LiveError {
 // mesmo painel (duplicar seria ruído).
 const SUPPRESSED = [
   /Nenhuma função 'setup'\/'loop'/i, // programa incompleto é esperado ao digitar
+  /está escrita diferente de 'main'/i, // card do analyzeCode (main com nome errado)
+  /Esperado '\)' mas encontrado ';'/i, // card do analyzeCode (';' no lugar da vírgula)
   /Chaves desbalanceadas/i, // card do analyzeCode (balanço de chaves)
   /diretiva include/i, // card do analyzeCode (include mal escrito)
   /não existe\. Você quis dizer/i, // card do analyzeCode (biblioteca com nome errado)

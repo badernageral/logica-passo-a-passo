@@ -46,6 +46,9 @@ então o working tree não fica sujo após o deploy.
 | `src/lib/code-warnings.ts` | Análise estática pedagógica (avisos antes da execução) |
 | `src/lib/error-hints.ts` | Dicas didáticas mapeadas de mensagens de erro |
 | `src/lib/source-scan.ts` | Varredura do fonte original (strip de comentários/strings, `#include` obrigatório) |
+| `src/lib/printf-format.ts` | Formatação `printf` do C (flags, largura, precisão) — conferida contra o gcc |
+| `src/lib/c-builtins.ts` | Funções embutidas puras (`math.h`, `map`, `constrain`…) — a lista alimenta também a análise estática |
+| `src/lib/format-types.ts` | Compatibilidade `%d`/`%f`/`%c`/`%s` × tipo da variável (usado pela análise estática e pelo scanf) |
 | `src/routes/index.tsx` | UI principal: editor, variáveis, console, controles |
 | `src/routes/__root.tsx` | Root route (sem SSR — apenas `<Outlet />`) |
 | `src/router.tsx` | `createRouter` com `basepath: "/logica-passo-a-passo"` |

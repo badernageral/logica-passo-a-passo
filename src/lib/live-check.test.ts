@@ -18,6 +18,14 @@ describe("liveCheck (dry-run em modo C)", () => {
     expect(liveCheck("   \n\t")).toBeNull();
   });
 
+  it("não duplica o card do analyzeCode quando 'main' está digitado errado", () => {
+    expect(liveCheck(HELLO.replace("int main()", "int mian()"))).toBeNull();
+  });
+
+  it("não duplica o card do analyzeCode do ';' dentro dos parênteses", () => {
+    expect(liveCheck(HELLO.replace(`printf("Olá, mundo!\\n")`, `printf("oi";1)`))).toBeNull();
+  });
+
   it("acusa sequência de escape desconhecida (\\m) com dica didática", () => {
     const code = HELLO.replace("Olá, mundo!\\n", "Olá, \\mundo!\\n");
     const err = liveCheck(code);

@@ -144,7 +144,7 @@ function formatVarTooltip(v: Variable): string {
       valStr = "[…]";
     }
   } else {
-    valStr = String(v.value);
+    valStr = v.uninit ? "(sem valor)" : String(v.value);
   }
   const scope = v.scope === "global" ? "global" : v.scope.split("#")[0];
   return `${v.type}${dims} ${v.name} = ${valStr}\nescopo: ${scope}`;

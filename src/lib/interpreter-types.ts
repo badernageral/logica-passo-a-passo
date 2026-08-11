@@ -13,6 +13,10 @@ export interface Variable {
   dims?: number[];
   /** Índice(s) modificado(s) recentemente (para destaque visual). */
   lastIndex?: number[];
+  /** Declarada sem valor inicial e ainda sem atribuição — o card mostra vazio. */
+  uninit?: boolean;
+  /** Células de vetor/matriz ainda sem valor atribuído (mesma forma de `value`). */
+  uninitCells?: boolean[] | boolean[][];
 }
 
 export interface OutputLine {
@@ -164,6 +168,10 @@ export type ArrayInit = (number | string)[] | (number | string)[][];
 export interface ScanfTarget {
   name: string;
   indices?: Expr[];
+  /** `true` quando o aluno escreveu `&var`. Sem o '&', só vetores são válidos. */
+  byAddress?: boolean;
+  /** Letra de conversão do formato nesta posição (`d`, `f`, `c`, `s`…). */
+  spec?: string;
 }
 
 export interface FnDef {
