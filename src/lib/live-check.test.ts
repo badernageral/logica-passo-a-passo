@@ -48,6 +48,22 @@ describe("liveCheck (dry-run em modo C)", () => {
     expect(err!.hint).toBeTruthy();
   });
 
+  it("acusa variável redeclarada já na digitação, com a linha da repetição", () => {
+    const err = liveCheck(HELLO.replace("\tprintf", "\tfloat c;\n\tfloat c = 1.2;\n\tprintf"));
+    expect(err).not.toBeNull();
+    expect(err!.message).toMatch(/Variável 'c' já declarada/);
+    expect(err!.line).toBe(5);
+    expect(err!.hint).toBeTruthy();
+  });
+
+  it("acusa printf com mais '%' do que argumentos, com dica didática", () => {
+    const err = liveCheck(HELLO.replace(`printf("Olá, mundo!\\n")`, `printf("%d %d", 1)`));
+    expect(err).not.toBeNull();
+    expect(err!.message).toMatch(/o formato pede 2 valores/);
+    expect(err!.line).toBe(4);
+    expect(err!.hint).toMatch(/cada identificador de formato/i);
+  });
+
   it("não acusa programa ainda incompleto (sem main) durante a digitação", () => {
     expect(liveCheck("// começando a escrever")).toBeNull();
   });

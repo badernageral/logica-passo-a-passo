@@ -155,6 +155,14 @@ const RULES: HintRule[] = [
       `Para usar digitalRead/analogRead avance o programa com 'Próxima linha' — uma janela vai aparecer pedindo o valor lido (0 ou 1 para digital, 0 a 1023 para analógico).`,
   },
   {
+    // Antes das regras genéricas de printf/scanf: a mensagem cita as duas.
+    test: /(printf|scanf) da linha \d+: o formato pede/i,
+    hint: (m) =>
+      m[1].toLowerCase() === "printf"
+        ? `No printf, cada identificador de formato (%d, %f, %c, %s…) é substituído por UM argumento, na ordem em que aparecem. Conte os '%' do texto e ponha exatamente essa quantidade de valores depois da vírgula. Se você quer imprimir o mesmo valor três vezes, repita a variável: printf("%d %d %d", a, a, a). Para um '%' literal no texto, escreva '%%'.`
+        : `No scanf, cada identificador de formato lê um valor e precisa de uma variável para guardá-lo, na ordem. Conte os '%' e passe a mesma quantidade de variáveis, todas com '&': scanf("%d %d", &a, &b).`,
+  },
+  {
     test: /scanf/i,
     hint: () =>
       `Verifique a sintaxe do scanf: 'scanf("%d", &variavel);' — o '&' antes do nome da variável é obrigatório. Em Arduino, prefira digitalRead(pino) ou analogRead(pino) para ler entradas de pinos.`,

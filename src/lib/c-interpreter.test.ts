@@ -315,6 +315,136 @@ describe("Erros são reportados, não lançam", () => {
   });
 });
 
+describe("Redeclaração de variável", () => {
+  it("declarar o mesmo nome duas vezes no bloco é erro", () => {
+    const interp = new CInterpreter(
+      `#include <stdio.h>\nint main(){\n  float c;\n  float c = 1.2;\n}`,
+    );
+    expect(interp.state.error).toMatch(/Variável 'c' já declarada/);
+  });
+
+  it("o erro aponta a linha da repetição, não a da primeira declaração", () => {
+    const interp = new CInterpreter(
+      `#include <stdio.h>\nint main(){\n  float c;\n  float c = 1.2;\n}`,
+    );
+    expect(interp.state.currentLine).toBe(4);
+  });
+
+  it("repetir o nome na mesma declaração também é erro", () => {
+    expect(new CInterpreter(`int main(){ int a, a; }`).state.error).toMatch(/já declarada/);
+  });
+
+  it("parâmetro redeclarado no corpo da função é erro", () => {
+    const interp = new CInterpreter(
+      `#include <stdio.h>\nvoid f(int a){ int a = 2; }\nint main(){}`,
+    );
+    expect(interp.state.error).toMatch(/Variável 'a' já declarada/);
+  });
+
+  it("duas variáveis globais com o mesmo nome são erro", () => {
+    expect(new CInterpreter(`int g;\nint g = 1;\nint main(){}`).state.error).toMatch(
+      /já declarada/,
+    );
+  });
+
+  // Casos legítimos: o mesmo nome em blocos diferentes é outra variável em C.
+  it("declarar o mesmo nome em blocos irmãos é permitido", () => {
+    const { state } = run(`#include <stdio.h>
+int main(){
+  if (1) { int t = 1; }
+  while (0) { int t = 2; }
+}`);
+    expect(state.error).toBeNull();
+  });
+
+  it("local pode ter o mesmo nome de uma global (sombreamento)", () => {
+    expect(out(`#include <stdio.h>\nint g = 5;\nint main(){ int g = 7; printf("%d", g); }`)).toBe(
+      "7",
+    );
+  });
+
+  it("mesma função declarando o nome em escopos diferentes (setup/loop)", () => {
+    const { state } = run(`void setup(){ int a = 1; }\nvoid loop(){ int a = 2; }`, [], 60);
+    expect(state.error).toBeNull();
+  });
+
+  it("declaração dentro de laço vale por iteração e não congela o valor", () => {
+    // Antes, cada iteração empilhava uma variável nova e a leitura pegava a
+    // primeira — 'x' ficava travado no valor da 1ª volta.
+    expect(
+      out(`#include <stdio.h>
+int main(){
+  for (int i = 0; i < 3; i++) { int x = i * 2; printf("%d ", x); }
+}`),
+    ).toBe("0 2 4");
+  });
+});
+
+describe("Quantidade de identificadores de formato x argumentos", () => {
+  it("printf com mais identificadores que argumentos é erro", () => {
+    const interp = new CInterpreter(
+      `#include <stdio.h>\nint main(){\n  int a = 1;\n  printf("%d %d %d", a, a);\n}`,
+    );
+    expect(interp.state.error).toMatch(/printf da linha 4: o formato pede 3 valores/);
+    expect(interp.state.currentLine).toBe(4);
+  });
+
+  it("printf com argumentos sobrando também é erro", () => {
+    const interp = new CInterpreter(
+      `#include <stdio.h>\nint main(){ int a=1, b=2; printf("%d", a, b); }`,
+    );
+    expect(interp.state.error).toMatch(/1 argumento ficaria ignorado/);
+  });
+
+  it("printf sem nenhum argumento para o identificador", () => {
+    const interp = new CInterpreter(`#include <stdio.h>\nint main(){ printf("%d\\n"); }`);
+    expect(interp.state.error).toMatch(/nenhum foi passado/);
+  });
+
+  it("scanf com menos variáveis que identificadores é erro", () => {
+    const interp = new CInterpreter(
+      `#include <stdio.h>\nint main(){ int a, b; scanf("%d %d", &a); }`,
+    );
+    expect(interp.state.error).toMatch(/scanf da linha 2: o formato pede 2 variáveis/);
+  });
+
+  it("acusa também dentro de blocos aninhados", () => {
+    const interp = new CInterpreter(
+      `#include <stdio.h>\nint main(){ int x = 1; if (x) { printf("%d %d", x); } }`,
+    );
+    expect(interp.state.error).toMatch(/o formato pede 2 valores/);
+  });
+
+  // Casos legítimos.
+  it("'%%' não consome argumento", () => {
+    expect(out(`#include <stdio.h>\nint main(){ int a=1; printf("100%% de %d", a); }`)).toBe(
+      "100% de 1",
+    );
+  });
+
+  it("chamadas de função como argumento contam uma vez cada", () => {
+    const src = `#include <stdio.h>
+int soma(int a, int b){ return a + b; }
+int main(){ printf("%d %d", soma(1, 2), soma(3, 4)); }`;
+    expect(out(src)).toBe("3 7");
+  });
+
+  it("largura por argumento ('%*d') desativa a checagem", () => {
+    const { state } = run(`#include <stdio.h>\nint main(){ printf("%*d", 5, 42); }`);
+    expect(state.error).toBeNull();
+  });
+
+  it("'%' literal num Serial.print não é contado nem impresso como formato", () => {
+    const { state, serial } = run(
+      `void setup(){ Serial.begin(9600); Serial.println("100% pronto"); }\nvoid loop(){}`,
+      [],
+      60,
+    );
+    expect(state.error).toBeNull();
+    expect(serial.trim()).toBe("100% pronto");
+  });
+});
+
 describe("Bibliotecas obrigatórias (#include)", () => {
   it("printf sem <stdio.h> impede a execução", () => {
     const interp = new CInterpreter(`int main() {\n\tprintf("Olá");\n}`);

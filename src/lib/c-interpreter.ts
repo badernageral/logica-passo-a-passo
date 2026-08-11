@@ -52,7 +52,7 @@ import {
 } from "./source-scan";
 import { formatPrintf } from "./printf-format";
 import { BUILTIN_FUNCTIONS } from "./c-builtins";
-import { formatMismatch, kindOfType } from "./format-types";
+import { conversionsOf, formatMismatch, kindOfType } from "./format-types";
 
 // Re-exporta os tipos públicos para manter a API de importação estável.
 export type {
@@ -107,6 +107,177 @@ function isReturnSignal(e: unknown): e is { __return: number | string } {
 /** Extrai a mensagem de um erro desconhecido capturado em catch. */
 function errorMessage(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
+}
+
+/** Uma variável declarada duas vezes no mesmo bloco. */
+interface Redeclaration {
+  name: string;
+  /** Linha da declaração repetida (a que o aluno precisa apagar). */
+  line: number;
+  /** Linha da primeira declaração, a válida. */
+  first: number;
+}
+
+/**
+ * Procura declarações repetidas percorrendo cada bloco do programa.
+ *
+ * A regra é a do C: só é erro quando o MESMO bloco declara o nome duas vezes.
+ * Um bloco interno pode repetir o nome de um externo (sombreamento) e um mesmo
+ * `int x;` dentro de um laço vale uma vez por iteração — por isso a checagem é
+ * estática, sobre a AST, e não durante a execução: no runtime não há como
+ * distinguir a segunda iteração de uma segunda declaração.
+ */
+function findRedeclarations(fns: FnDef[], globals: Stmt[]): Redeclaration[] {
+  const found: Redeclaration[] = [];
+
+  const scanBlock = (body: Stmt[], seed: [string, number][] = []) => {
+    const seen = new Map<string, number>(seed);
+    for (const s of body) {
+      switch (s.k) {
+        case "decl":
+          for (const it of s.items) {
+            const first = seen.get(it.name);
+            if (first !== undefined) found.push({ name: it.name, line: s.line, first });
+            else seen.set(it.name, s.line);
+          }
+          break;
+        case "if":
+          scanBlock(s.then);
+          if (s.else) scanBlock(s.else);
+          break;
+        case "while":
+        case "dowhile":
+        case "block":
+          scanBlock(s.body);
+          break;
+        case "for":
+          // O 'init' vive no escopo do próprio for, que ENVOLVE o corpo: por
+          // isso os dois são blocos separados — `for (int i…) { int i; }`
+          // é sombreamento legítimo, não redeclaração.
+          if (s.init) scanBlock([s.init]);
+          scanBlock(s.body);
+          break;
+        case "switch":
+          // Todos os 'case' compartilham um único bloco em C.
+          scanBlock(s.cases.flatMap((c) => c.body));
+          break;
+      }
+    }
+  };
+
+  scanBlock(globals);
+  for (const fn of fns) {
+    // Os parâmetros pertencem ao bloco do corpo: `void f(int a){ int a; }` é erro.
+    scanBlock(
+      fn.body,
+      fn.params.map((p) => [p.name, fn.line ?? 0] as [string, number]),
+    );
+  }
+
+  return found.sort((a, b) => a.line - b.line);
+}
+
+/** Visita todo statement do programa, entrando em blocos aninhados. */
+function walkStmts(body: Stmt[], visit: (s: Stmt) => void) {
+  for (const s of body) {
+    visit(s);
+    switch (s.k) {
+      case "if":
+        walkStmts(s.then, visit);
+        if (s.else) walkStmts(s.else, visit);
+        break;
+      case "while":
+      case "dowhile":
+      case "block":
+        walkStmts(s.body, visit);
+        break;
+      case "for":
+        if (s.init) walkStmts([s.init], visit);
+        walkStmts(s.body, visit);
+        break;
+      case "switch":
+        for (const c of s.cases) walkStmts(c.body, visit);
+        break;
+    }
+  }
+}
+
+/** printf/scanf cujo formato pede mais (ou menos) valores do que os passados. */
+interface ArityMismatch {
+  fn: "printf" | "scanf";
+  line: number;
+  /** Conversões do formato, na ordem: `["d", "d", "d"]`. */
+  convs: string[];
+  /** Quantos argumentos vieram depois do formato. */
+  given: number;
+}
+
+/**
+ * Confere se a quantidade de identificadores de formato bate com a de argumentos.
+ *
+ * `printf("%d %d %d", a, a)` lê lixo no terceiro `%d`; `printf("%d", a, b)`
+ * ignora `b` calado. Os dois são erro de aluno e nenhum aparece sozinho.
+ *
+ * Formatos com `*` (largura por argumento) desalinham a correspondência e o
+ * `conversionsOf` devolve `null` — nesses casos não há o que conferir.
+ */
+function findFormatArityMismatches(
+  fns: FnDef[],
+  globals: Stmt[],
+  serialLines: Set<number>,
+): ArityMismatch[] {
+  const found: ArityMismatch[] = [];
+  const visit = (s: Stmt) => {
+    if (s.k !== "printf" && s.k !== "scanf") return;
+    // Um printf que na verdade é um Serial.print reescrito: ali o '%' do texto
+    // é literal ("100% pronto") e a contagem seria um falso positivo.
+    if (serialLines.has(s.line)) return;
+    const convs = conversionsOf(s.fmt);
+    if (!convs) return;
+    const given = s.k === "printf" ? s.args.length : s.targets.length;
+    if (convs.length !== given) found.push({ fn: s.k, line: s.line, convs, given });
+  };
+  walkStmts(globals, visit);
+  for (const fn of fns) walkStmts(fn.body, visit);
+  return found.sort((a, b) => a.line - b.line);
+}
+
+/** Monta a mensagem de erro de um printf/scanf com quantidade errada de argumentos. */
+function arityMessage(bad: ArityMismatch): string {
+  // printf recebe VALORES (masculino); scanf recebe VARIÁVEIS (feminino).
+  const fem = bad.fn === "scanf";
+  const pede = bad.convs.length;
+  const substantivo = (n: number) =>
+    n === 1 ? (fem ? "variável" : "valor") : fem ? "variáveis" : "valores";
+
+  const passados =
+    bad.given === 0
+      ? fem
+        ? "nenhuma foi passada"
+        : "nenhum foi passado"
+      : `${bad.given} ${
+          bad.given === 1
+            ? fem
+              ? "foi passada"
+              : "foi passado"
+            : fem
+              ? "foram passadas"
+              : "foram passados"
+        }`;
+
+  const dif = Math.abs(pede - bad.given);
+  const detalhe =
+    bad.given < pede
+      ? `${dif === 1 ? "sobra 1 identificador" : `sobram ${dif} identificadores`} sem argumento correspondente`
+      : dif === 1
+        ? "1 argumento ficaria ignorado"
+        : `${dif} argumentos ficariam ignorados`;
+
+  return (
+    `${bad.fn} da linha ${bad.line}: o formato pede ${pede} ${substantivo(pede)} ` +
+    `(${bad.convs.map((c) => "%" + c).join(", ")}), mas ${passados} — ${detalhe}. ` +
+    `Cada identificador de formato consome um argumento, na ordem: a quantidade tem que bater.`
+  );
 }
 
 /** Extrai o número da linha de uma mensagem de erro do parser/interpretador. */
@@ -259,6 +430,30 @@ export class CInterpreter {
       const parser = new Parser(toks);
       const { fns, globals } = parser.parseProgram();
       for (const f of fns) this.fns[f.name] = f;
+
+      // Declaração repetida no mesmo bloco. A linha da repetição vem primeiro na
+      // mensagem de propósito: é ela que o extractLineFromError destaca no editor.
+      const [dup] = findRedeclarations(fns, globals);
+      if (dup) {
+        const onde =
+          dup.line === dup.first
+            ? `a linha ${dup.line} declara '${dup.name}' duas vezes`
+            : `a linha ${dup.line} declara de novo o que a linha ${dup.first} já declarou`;
+        throw new Error(
+          `Variável '${dup.name}' já declarada: ${onde}. ` +
+            `Em C o tipo aparece uma única vez — para mudar o valor escreva só '${dup.name} = …;'.`,
+        );
+      }
+
+      // Formato x quantidade de argumentos do printf/scanf. As linhas de
+      // Serial.* ficam de fora: ali o printf é gerado pelo pré-processamento e
+      // um '%' no meio do texto ("100% pronto") é literal, não identificador.
+      const serialLines = new Set<number>();
+      source.split("\n").forEach((ln, i) => {
+        if (/\bSerial\s*\./.test(ln)) serialLines.add(i + 1);
+      });
+      const [arity] = findFormatArityMismatches(fns, globals, serialLines);
+      if (arity) throw new Error(arityMessage(arity));
 
       // Tarefas didáticas iniciais: descrever cada diretiva #include.
       const intro: Task[] = [];
@@ -452,6 +647,27 @@ export class CInterpreter {
     }
     if (v.dims.length === 1) return (v.value as (number | string)[])[idxs[0]];
     return (v.value as (number | string)[][])[idxs[0]][idxs[1]];
+  }
+
+  /**
+   * Declara a variável no escopo, substituindo uma homônima já existente.
+   *
+   * Redeclaração de verdade já foi barrada por `findRedeclarations` antes de
+   * executar; então um nome repetido aqui só acontece quando o mesmo `int x;`
+   * roda de novo (nova iteração do laço) ou num bloco interno. Nos dois casos
+   * a variável é nova em C — empilhar uma segunda deixaria o `findVar`
+   * enxergando eternamente a primeira, com o valor congelado da 1ª iteração.
+   */
+  private declareVar(
+    type: CType,
+    it: { name: string; init: Expr | null; dims?: number[]; arrayInit?: ArrayInit },
+    scope: string,
+    justCreated: boolean,
+  ) {
+    const v = this.makeVarFromItem(type, it, scope, justCreated);
+    const at = this.vars.findIndex((x) => x.name === v.name && x.scope === scope);
+    if (at >= 0) this.vars[at] = v;
+    else this.vars.push(v);
   }
 
   /** Cria um Variable a partir de um item de declaração, lidando com escalares, vetores e matrizes. */
@@ -850,7 +1066,7 @@ export class CInterpreter {
     switch (s.k) {
       case "decl":
         for (const it of s.items) {
-          this.vars.push(this.makeVarFromItem(s.type, it, scope, false));
+          this.declareVar(s.type, it, scope, false);
         }
         break;
       case "expr":
@@ -1351,7 +1567,7 @@ export class CInterpreter {
       case "decl": {
         const names: string[] = [];
         for (const it of s.items) {
-          this.vars.push(this.makeVarFromItem(s.type, it, scope, true));
+          this.declareVar(s.type, it, scope, true);
           const dimsStr = it.dims ? "[" + it.dims.join("][") + "]" : "";
           names.push(it.name + dimsStr);
         }

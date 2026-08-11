@@ -79,6 +79,17 @@ então o working tree não fica sujo após o deploy.
 - **Ordem das regras em `error-hints.ts`**: a primeira que casar vence. A regra de
   biblioteca ausente precisa vir antes das regras genéricas `/printf/i` e `/scanf/i`,
   que casariam com o nome da função citado na mensagem.
+- **Redeclaração é checada na AST, nunca no runtime**: o escopo do interpretador
+  é por chamada de função (`main#a1b2`), não por bloco — no runtime não dá para
+  distinguir a 2ª iteração de um laço (`int x;` legítimo) de uma 2ª declaração.
+  `findRedeclarations` percorre bloco a bloco antes de executar; o `declareVar`
+  substitui a homônima do mesmo escopo em vez de empilhar outra (senão o
+  `findVar` acharia para sempre a variável da 1ª iteração).
+- **Aridade de printf/scanf pula linhas com `Serial.`**: o `Serial.print("100% ok")`
+  vira `printf` no pré-processamento, mas ali o `%` é texto literal — contar
+  identificadores acusaria um falso positivo. O `preprocessArduinoSerial` escapa
+  esses `%` para `%%`; a checagem ignora a linha porque o fonte ORIGINAL é a
+  única fonte confiável para saber o que o aluno realmente escreveu.
 - **Basepath**: o `createRouter` tem `basepath: "/logica-passo-a-passo"` e o Vite
   tem `base: "/logica-passo-a-passo/"`. Ambos são necessários — sem um deles ou a
   página fica em branco ou o roteador mostra 404.

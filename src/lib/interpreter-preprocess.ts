@@ -230,6 +230,10 @@ export function preprocessArduinoSerial(src: string): { source: string; beginLin
 
   let out = src;
   const beginLines = new Set<number>();
+  // No Serial.print o texto é impresso como está: um '%' ali é literal
+  // ("100% pronto"), não identificador de formato. Como o destino é um printf,
+  // ele precisa virar '%%' — senão o "% p" seria lido como conversão.
+  const escapePercent = (literal: string) => literal.replace(/%/g, "%%");
   // método -> transformação do conteúdo entre parênteses
   const methods: Array<{ name: string; transform: (arg: string) => string; track?: boolean }> = [
     { name: "begin", transform: () => "0", track: true }, // Serial.begin(...); vira "0;" (no-op válido)
@@ -241,7 +245,7 @@ export function preprocessArduinoSerial(src: string): { source: string; beginLin
         // Se já é uma string literal "..." sem vírgulas, concatena \n dentro.
         if (/^"(?:[^"\\]|\\.)*"$/.test(t)) {
           // remove a aspas final, adiciona \n, recoloca aspas
-          return `printf(${t.slice(0, -1)}\\n")`;
+          return `printf(${escapePercent(t).slice(0, -1)}\\n")`;
         }
         return `printf("%s\\n", ${arg})`;
       },
@@ -251,7 +255,7 @@ export function preprocessArduinoSerial(src: string): { source: string; beginLin
       transform: (arg) => {
         const t = arg.trim();
         if (t === "") return `printf("")`;
-        if (/^"(?:[^"\\]|\\.)*"$/.test(t)) return `printf(${t})`;
+        if (/^"(?:[^"\\]|\\.)*"$/.test(t)) return `printf(${escapePercent(t)})`;
         return `printf("%s", ${arg})`;
       },
     },
