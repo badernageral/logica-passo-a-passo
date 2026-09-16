@@ -123,6 +123,21 @@ export function analyzeCode(code: string, mode: "arduino" | "c" = "arduino"): Co
     }
   });
 
+  // 2b) `else` seguido direto de parênteses — em C 'else' não recebe condição
+  // ('else(x) { }' vira um '(x)' solto seguido de um bloco, e o parser morre
+  // com "Token inesperado '{'", uma mensagem que não aponta a causa real).
+  // 'else if (x)' não é pego aqui: entre 'else' e '(' há o 'if', que o '\s*'
+  // não consome.
+  lines.forEach((ln, i) => {
+    if (/\belse\s*\(/.test(ln)) {
+      warnings.push({
+        line: i + 1,
+        severity: "warning",
+        message: `'else' não recebe condição entre parênteses — em C ele sempre representa "senão, em qualquer outro caso". Para testar outra condição use 'else if (...)'; para o caso padrão, use só 'else { ... }'.`,
+      });
+    }
+  });
+
   // 3) Linha que parece instrução mas falta ';'
   lines.forEach((ln, i) => {
     const t = ln.trim();
@@ -243,6 +258,9 @@ export function analyzeCode(code: string, mode: "arduino" | "c" = "arduino"): Co
 
   // 10) Identificador de formato incompatível com o tipo declarado.
   warnings.push(...findFormatTypeMismatch(stripComments(code), cleaned));
+
+  // 10b) `char` inicializado com aspas duplas (deveria ser aspas simples).
+  warnings.push(...findCharStringInit(stripComments(code)));
 
   // 11) C: falta a função main — inclusive quando o nome só está digitado errado.
   if (mode === "c") warnings.push(...findMissingEntryPoint(cleaned));
@@ -417,6 +435,36 @@ function findFormatTypeMismatch(noComments: string, cleaned: string): CodeWarnin
       });
       break; // um por chamada basta
     }
+  }
+  return out;
+}
+
+// ── char inicializado com aspas duplas ────────────────────────
+
+/**
+ * `char x = "a";` — string (aspas duplas) atribuída a um `char` escalar. Em C
+ * isso é um erro de tipo (`char *` para `char`; gcc recusa ou ao menos avisa
+ * "makes integer from pointer without a cast"), mas o interpretador aceitava
+ * em silêncio: `coerce` para 'char' só pega o primeiro caractere da string,
+ * escondendo o problema em vez de sinalizá-lo.
+ *
+ * Vetores (`char nome[20] = "abc"`) e ponteiros (`char *p = "abc"`) usam
+ * aspas duplas de propósito, e ambos ficam de fora do padrão abaixo: há algo
+ * entre o tipo e o '=' — o '[...]' do vetor ou o '*' do ponteiro — então o
+ * nome não fica colado direto em `char <nome> =`.
+ */
+function findCharStringInit(noComments: string): CodeWarning[] {
+  const out: CodeWarning[] = [];
+  const re = /\bchar\s+([A-Za-z_]\w*)\s*=\s*"((?:[^"\\]|\\.)*)"/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(noComments)) !== null) {
+    const [, name, text] = m;
+    const suggestion = text[0] ?? " ";
+    out.push({
+      line: noComments.slice(0, m.index).split("\n").length,
+      severity: "warning",
+      message: `'${name}' é do tipo 'char' (um único caractere, entre aspas simples), mas foi inicializada com "${text}" (aspas duplas, texto). Use '${name} = '${suggestion}';' — ou troque para 'char ${name}[...]' se a intenção é guardar um texto.`,
+    });
   }
   return out;
 }
