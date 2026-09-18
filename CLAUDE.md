@@ -90,6 +90,11 @@ então o working tree não fica sujo após o deploy.
   identificadores acusaria um falso positivo. O `preprocessArduinoSerial` escapa
   esses `%` para `%%`; a checagem ignora a linha porque o fonte ORIGINAL é a
   única fonte confiável para saber o que o aluno realmente escreveu.
+- **Condição de `if`/`while` precisa de parênteses balanceados**: um `[^)]*`
+  para no primeiro `)`, e em `while (scanf("%d", &n) && n != 0)` o trecho
+  analisado vira `scanf(, &n` — o `&` de endereço era acusado de `&&` mal
+  digitado. Usar `balancedParens`; e o `&` só é "bit a bit" quando vem depois
+  de um operando (`followsOperand`), nunca em `&n`.
 - **Basepath**: o `createRouter` tem `basepath: "/logica-passo-a-passo"` e o Vite
   tem `base: "/logica-passo-a-passo/"`. Ambos são necessários — sem um deles ou a
   página fica em branco ou o roteador mostra 404.

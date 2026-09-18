@@ -83,43 +83,56 @@ export function analyzeCode(code: string, mode: "arduino" | "c" = "arduino"): Co
     });
   });
 
-  // 2) `=` em condição de if/while
+  // 2) Problemas dentro da condição de if/while.
+  // A condição é extraída com contagem de parênteses (ver `balancedParens`):
+  // um `[^)]*` pararia no primeiro ')', e em `while (scanf("%d", &n) && n != 0)`
+  // o pedaço analisado viraria 'scanf(, &n' — o '&' de endereço seria acusado
+  // de ser um '&&' mal digitado, num código perfeitamente válido.
   lines.forEach((ln, i) => {
-    const m = ln.match(/\b(if|while)\s*\(([^)]*)\)/);
-    if (m) {
-      const inside = m[2];
-      // procurar '=' que não seja '==', '<=', '>=', '!=', '+=', '-=', '*=', '/=', '%='
-      if (/(?<![=!<>+\-*/%])=(?!=)/.test(inside)) {
-        warnings.push({
-          line: i + 1,
-          severity: "warning",
-          message: `Dentro de '${m[1]}(...)' há um '=' (atribuição). Para comparar use '==' (igualdade). Ex.: 'if (x == 5)' em vez de 'if (x = 5)'.`,
-        });
-      }
-      // procurar '&' único (não '&&', não '&=') usado como lógico
-      if (/(?<![&])&(?![&=])/.test(inside)) {
-        warnings.push({
-          line: i + 1,
-          severity: "warning",
-          message: `Dentro de '${m[1]}(...)' há um '&' simples. Para "E" lógico use '&&'. Ex.: 'if (a == 1 && b == 2)' em vez de 'if (a == 1 & b == 2)'. ('&' sozinho é operação bit a bit.)`,
-        });
-      }
-      // procurar '|' único (não '||', não '|=')
-      if (/(?<![|])\|(?![|=])/.test(inside)) {
-        warnings.push({
-          line: i + 1,
-          severity: "warning",
-          message: `Dentro de '${m[1]}(...)' há um '|' simples. Para "OU" lógico use '||'. Ex.: 'if (a == 1 || b == 2)' em vez de 'if (a == 1 | b == 2)'. ('|' sozinho é operação bit a bit.)`,
-        });
-      }
-      // dois identificadores/valores adjacentes sem operador lógico entre eles
-      if (/[A-Za-z_0-9)\]]\s+[A-Za-z_(]/.test(inside.replace(/\b(?:sizeof|return)\b/g, ""))) {
-        warnings.push({
-          line: i + 1,
-          severity: "warning",
-          message: `Dentro de '${m[1]}(...)' parece faltar um operador lógico ('&&' ou '||') entre duas comparações. Ex.: 'if (a == 1 && b == 2)' em vez de 'if (a == 1  b == 2)'.`,
-        });
-      }
+    const kw = ln.match(/\b(if|while)\s*\(/);
+    if (!kw) return;
+    const inside = balancedParens(ln, kw.index! + kw[0].length - 1);
+    if (inside === null) return;
+
+    // procurar '=' que não seja '==', '<=', '>=', '!=', '+=', '-=', '*=', '/=', '%='
+    if (/(?<![=!<>+\-*/%])=(?!=)/.test(inside)) {
+      warnings.push({
+        line: i + 1,
+        severity: "warning",
+        message: `Dentro de '${kw[1]}(...)' há um '=' (atribuição). Para comparar use '==' (igualdade). Ex.: 'if (x == 5)' em vez de 'if (x = 5)'.`,
+      });
+    }
+    // procurar '&' único (não '&&', não '&=') usado como lógico. O '&' de
+    // endereço ('&n' do scanf) não conta: só é bit a bit quando vem DEPOIS de
+    // um operando.
+    const amp = findLoneOperator(inside, "&");
+    if (amp >= 0 && followsOperand(inside, amp)) {
+      warnings.push({
+        line: i + 1,
+        severity: "warning",
+        message: `Dentro de '${kw[1]}(...)' há um '&' simples. Para "E" lógico use '&&'. Ex.: 'if (a == 1 && b == 2)' em vez de 'if (a == 1 & b == 2)'. ('&' sozinho é operação bit a bit.)`,
+      });
+    }
+    // procurar '|' único (não '||', não '|=')
+    if (findLoneOperator(inside, "|") >= 0) {
+      warnings.push({
+        line: i + 1,
+        severity: "warning",
+        message: `Dentro de '${kw[1]}(...)' há um '|' simples. Para "OU" lógico use '||'. Ex.: 'if (a == 1 || b == 2)' em vez de 'if (a == 1 | b == 2)'. ('|' sozinho é operação bit a bit.)`,
+      });
+    }
+    // dois identificadores/valores adjacentes sem operador lógico entre eles.
+    // Casts ('(int) x') são removidos antes: o ')' seguido do operando pareceria
+    // justamente esse erro.
+    const semCast = inside
+      .replace(new RegExp(`\\(\\s*(?:unsigned|signed|long)?\\s*(?:${TYPE_KW})\\s*\\*?\\s*\\)`, "g"), " ")
+      .replace(/\b(?:sizeof|return)\b/g, "");
+    if (/[A-Za-z_0-9)\]]\s+[A-Za-z_(]/.test(semCast)) {
+      warnings.push({
+        line: i + 1,
+        severity: "warning",
+        message: `Dentro de '${kw[1]}(...)' parece faltar um operador lógico ('&&' ou '||') entre duas comparações. Ex.: 'if (a == 1 && b == 2)' em vez de 'if (a == 1  b == 2)'.`,
+      });
     }
   });
 
@@ -555,6 +568,48 @@ function findMissingEntryPoint(cleaned: string): CodeWarning[] {
 }
 
 // ── Análise de identificadores não declarados ─────────────────
+/**
+ * Texto entre o '(' na posição `open` e o ')' que o fecha, contando parênteses
+ * aninhados. `null` quando o parêntese não fecha na mesma linha — aí a condição
+ * é multilinha e esta análise (que é linha a linha) não tem o texto completo.
+ */
+function balancedParens(line: string, open: number): string | null {
+  let depth = 0;
+  for (let i = open; i < line.length; i++) {
+    if (line[i] === "(") depth++;
+    else if (line[i] === ")") {
+      depth--;
+      if (depth === 0) return line.slice(open + 1, i);
+    }
+  }
+  return null;
+}
+
+/** Posição do primeiro `ch` solto (não duplicado e não seguido de '='), ou -1. */
+function findLoneOperator(s: string, ch: string): number {
+  for (let i = 0; i < s.length; i++) {
+    if (s[i] !== ch) continue;
+    if (s[i + 1] === ch) {
+      i++; // '&&' / '||' — pula o par inteiro
+      continue;
+    }
+    if (s[i + 1] === "=") continue; // '&=' / '|='
+    return i;
+  }
+  return -1;
+}
+
+/**
+ * O caractere na posição `idx` vem depois de um operando (fim de identificador,
+ * número, ')' ou ']')? É o que separa o '&' bit a bit do '&' de endereço:
+ * em 'a & b' há operando à esquerda; em 'scanf("%d", &n)' não há.
+ */
+function followsOperand(s: string, idx: number): boolean {
+  let j = idx - 1;
+  while (j >= 0 && /\s/.test(s[j])) j--;
+  return j >= 0 && /[A-Za-z_0-9)\]]/.test(s[j]);
+}
+
 const TYPE_KW = "int|float|double|char|void|long|short|unsigned|signed|bool|byte|boolean|String";
 
 const RESERVED = new Set<string>([
