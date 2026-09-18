@@ -109,7 +109,14 @@ export type Expr =
   | { k: "assign"; name: string; v: Expr; indices?: Expr[] }
   | { k: "call"; name: string; args: Expr[] }
   | { k: "index"; name: string; indices: Expr[] }
-  | { k: "ternary"; cond: Expr; a: Expr; b: Expr };
+  | { k: "ternary"; cond: Expr; a: Expr; b: Expr }
+  /**
+   * `scanf` usado como EXPRESSÃO (ex.: `while (scanf("%d", &n) == 1)`).
+   * Em C o scanf devolve quantos itens leu; aqui a leitura acontece nas mesmas
+   * etapas do comando `scanf` (uma variável por vez, pausando para a entrada) e
+   * o valor da expressão é o número de alvos lidos.
+   */
+  | { k: "scanfcall"; fmt: string; targets: ScanfTarget[]; line: number };
 
 export type Stmt =
   | {

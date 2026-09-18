@@ -249,6 +249,62 @@ describe("Linguagem C — entrada (scanf)", () => {
   });
 });
 
+describe("scanf usado como expressão", () => {
+  it("soma até o 0 com scanf dentro da condição do while", () => {
+    const src = `#include <stdio.h>
+int main() {
+  int n, soma = 0;
+  while (scanf("%d", &n) && n != 0) {
+    soma += n;
+  }
+  printf("%d", soma);
+}`;
+    expect(out(src, ["10", "20", "12", "0"])).toBe("42");
+  });
+
+  it("devolve a quantidade de itens lidos, como em C", () => {
+    const um = `#include <stdio.h>\nint main(){ int n; printf("%d", scanf("%d", &n)); }`;
+    expect(out(um, ["7"])).toBe("1");
+    const dois = `#include <stdio.h>\nint main(){ int a, b; printf("%d", scanf("%d %d", &a, &b)); }`;
+    expect(out(dois, ["1", "2"])).toBe("2");
+  });
+
+  it("lê de novo a cada volta do laço", () => {
+    const src = `#include <stdio.h>
+int main() {
+  int n;
+  while (scanf("%d", &n) == 1 && n > 0) {
+    printf("%d;", n);
+  }
+}`;
+    expect(out(src, ["3", "2", "-1"])).toBe("3;2;");
+  });
+
+  it("vale também na condição do for e em atribuição", () => {
+    const paraFor = `#include <stdio.h>
+int main() {
+  int n, total = 0;
+  for (; scanf("%d", &n) && n > 0; ) {
+    total += n;
+  }
+  printf("%d", total);
+}`;
+    expect(out(paraFor, ["5", "6", "0"])).toBe("11");
+    const atrib = `#include <stdio.h>\nint main(){ int n, lidos; lidos = scanf("%d", &n); printf("%d-%d", lidos, n); }`;
+    expect(out(atrib, ["9"])).toBe("1-9");
+  });
+
+  it("mantém as checagens do scanf comum (falta do '&')", () => {
+    const src = `#include <stdio.h>\nint main(){ int n; while (scanf("%d", n)) { } }`;
+    expect(run(src, ["1"]).state.error).toMatch(/Faltou o '&' antes de 'n'/);
+  });
+
+  it("if com scanf na condição executa o bloco certo", () => {
+    const src = `#include <stdio.h>\nint main(){ int n; if (scanf("%d", &n) == 1) printf("li %d", n); else printf("nada"); }`;
+    expect(out(src, ["4"])).toBe("li 4");
+  });
+});
+
 describe("Linguagem C — casos de borda", () => {
   it("acessa elemento de matriz 2D", () => {
     const src = `#include <stdio.h>\nint main(){ int m[2][2]; m[0][0] = 1; m[1][1] = 9; printf("%d", m[1][1]); }`;

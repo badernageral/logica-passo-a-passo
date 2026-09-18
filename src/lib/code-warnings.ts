@@ -125,7 +125,10 @@ export function analyzeCode(code: string, mode: "arduino" | "c" = "arduino"): Co
     // Casts ('(int) x') são removidos antes: o ')' seguido do operando pareceria
     // justamente esse erro.
     const semCast = inside
-      .replace(new RegExp(`\\(\\s*(?:unsigned|signed|long)?\\s*(?:${TYPE_KW})\\s*\\*?\\s*\\)`, "g"), " ")
+      .replace(
+        new RegExp(`\\(\\s*(?:unsigned|signed|long)?\\s*(?:${TYPE_KW})\\s*\\*?\\s*\\)`, "g"),
+        " ",
+      )
       .replace(/\b(?:sizeof|return)\b/g, "");
     if (/[A-Za-z_0-9)\]]\s+[A-Za-z_(]/.test(semCast)) {
       warnings.push({

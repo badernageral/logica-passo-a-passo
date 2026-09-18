@@ -621,7 +621,11 @@ export class Parser {
     return { k: "printf", fmt: fmtTok.v, args, line };
   }
 
-  parseScanf(): Stmt {
+  /**
+   * Lê `scanf("...", &a, &b)` SEM consumir o ';' — a mesma sintaxe serve ao
+   * comando (`parseScanf`) e ao uso como expressão (`while (scanf(...) == 1)`).
+   */
+  parseScanfParts(): { fmt: string; targets: ScanfTarget[]; line: number } {
     const line = this.eat("scanf").line;
     this.eat("(");
     const fmtTok = this.eat("str");
@@ -643,12 +647,17 @@ export class Parser {
       targets.push(indices.length ? { name, indices, byAddress } : { name, byAddress });
     }
     this.eat(")");
-    this.eat(";");
     // Cada alvo carrega a conversão da sua posição: a execução trata um alvo por
     // vez e, sem isso, perderia a correspondência com o formato.
     const convs = conversionsOf(fmtTok.v);
     if (convs) targets.forEach((t, i) => (t.spec = convs[i]));
-    return { k: "scanf", fmt: fmtTok.v, targets, line };
+    return { fmt: fmtTok.v, targets, line };
+  }
+
+  parseScanf(): Stmt {
+    const { fmt, targets, line } = this.parseScanfParts();
+    this.eat(";");
+    return { k: "scanf", fmt, targets, line };
   }
 
   parseBlockOrStmt(): Stmt[] {
@@ -786,6 +795,12 @@ export class Parser {
   }
   parsePrimary(): Expr {
     const tk = this.peek();
+    // `scanf` também vale como expressão: em C ele devolve quantos itens leu,
+    // e o idioma `while (scanf("%d", &n) == 1)` depende disso.
+    if (tk.t === "scanf") {
+      const { fmt, targets, line } = this.parseScanfParts();
+      return { k: "scanfcall", fmt, targets, line };
+    }
     if (tk.t === "num") {
       this.eat();
       return { k: "num", v: parseFloat(tk.v) };

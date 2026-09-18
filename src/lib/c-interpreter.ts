@@ -5,7 +5,8 @@
  *  - Declaração com/sem inicialização: int x = 5;  float a, b = 2.0;
  *  - Atribuições e expressões aritméticas (+ - * / %), comparações (== != < > <= >=), lógicos (&& || !)
  *  - printf("...", args)  com %d %i %u %f %e %g %x %o %c %s, flags/largura/precisão (%.2f, %-5d) e \n
- *  - scanf("...", &var)  (uma variável por chamada para simplicidade didática)
+ *  - scanf("...", &var)  — como comando e também como expressão
+ *    (`while (scanf("%d", &n) == 1)`), devolvendo quantos itens leu
  *  - if / else  com blocos { }
  *  - while ( ... ) { ... }
  *  - for (init; cond; step) { ... }
@@ -202,6 +203,60 @@ function walkStmts(body: Stmt[], visit: (s: Stmt) => void) {
   }
 }
 
+/** Expressões escritas diretamente numa stmt (sem entrar nos sub-blocos). */
+function exprsOfStmt(s: Stmt): Expr[] {
+  switch (s.k) {
+    case "decl":
+      return s.items.map((it) => it.init).filter((e): e is Expr => !!e);
+    case "expr":
+      return [s.e];
+    case "printf":
+      return s.args;
+    case "if":
+    case "while":
+    case "dowhile":
+      return [s.cond];
+    case "switch":
+      return [s.disc, ...s.cases.map((c) => c.test)].filter((e): e is Expr => !!e);
+    case "for":
+      return [s.cond, s.step].filter((e): e is Expr => !!e);
+    case "return":
+      return s.e ? [s.e] : [];
+    default:
+      return [];
+  }
+}
+
+/** Chama `cb` em cada `scanf(...)` usado como expressão dentro de `e`. */
+function forEachScanfCall(e: Expr, cb: (x: Extract<Expr, { k: "scanfcall" }>) => void) {
+  switch (e.k) {
+    case "scanfcall":
+      cb(e);
+      break;
+    case "bin":
+      forEachScanfCall(e.a, cb);
+      forEachScanfCall(e.b, cb);
+      break;
+    case "un":
+      forEachScanfCall(e.a, cb);
+      break;
+    case "assign":
+      forEachScanfCall(e.v, cb);
+      break;
+    case "call":
+      for (const a of e.args) forEachScanfCall(a, cb);
+      break;
+    case "ternary":
+      forEachScanfCall(e.cond, cb);
+      forEachScanfCall(e.a, cb);
+      forEachScanfCall(e.b, cb);
+      break;
+    case "index":
+      for (const ix of e.indices) forEachScanfCall(ix, cb);
+      break;
+  }
+}
+
 /** printf/scanf cujo formato pede mais (ou menos) valores do que os passados. */
 interface ArityMismatch {
   fn: "printf" | "scanf";
@@ -228,6 +283,16 @@ function findFormatArityMismatches(
 ): ArityMismatch[] {
   const found: ArityMismatch[] = [];
   const visit = (s: Stmt) => {
+    // scanf usado como expressão (`while (scanf("%d %d", &n))`) não é uma stmt,
+    // mas erra a contagem do mesmo jeito.
+    for (const e of exprsOfStmt(s)) {
+      forEachScanfCall(e, (x) => {
+        if (serialLines.has(x.line)) return;
+        const cs = conversionsOf(x.fmt);
+        if (cs && cs.length !== x.targets.length)
+          found.push({ fn: "scanf", line: x.line, convs: cs, given: x.targets.length });
+      });
+    }
     if (s.k !== "printf" && s.k !== "scanf") return;
     // Um printf que na verdade é um Serial.print reescrito: ali o '%' do texto
     // é literal ("100% pronto") e a contagem seria um falso positivo.
@@ -316,6 +381,13 @@ type Task =
   | { kind: "for-init"; forStmt: Extract<Stmt, { k: "for" }>; scope: string }
   | { kind: "for-cond"; forStmt: Extract<Stmt, { k: "for" }>; scope: string }
   | { kind: "for-step"; forStmt: Extract<Stmt, { k: "for" }>; scope: string }
+  /**
+   * `scanf` usado como expressão: roda a leitura com o MESMO comando `scanf`
+   * (uma variável por vez) e, ao terminar, o `scanf-expr-done` publica o valor
+   * da expressão — o número de itens lidos.
+   */
+  | { kind: "scanf-expr"; expr: Extract<Expr, { k: "scanfcall" }>; scope: string; line: number }
+  | { kind: "scanf-expr-done"; callExpr: Expr; count: number; line: number }
   | {
       kind: "scanf-pending";
       targets: string[];
@@ -340,6 +412,17 @@ type Task =
       line: number;
       scope: string;
     };
+
+/** Chamada dentro de uma expressão que precisa rodar passo-a-passo antes dela. */
+type PendingCall =
+  | { kind: "fn"; expr: Extract<Expr, { k: "call" }>; fn: FnDef }
+  | {
+      kind: "pin";
+      expr: Extract<Expr, { k: "call" }>;
+      fnName: "digitalRead" | "analogRead";
+      pin: number;
+    }
+  | { kind: "scanfx"; expr: Extract<Expr, { k: "scanfcall" }> };
 
 export class CInterpreter {
   private fns: Record<string, FnDef> = {};
@@ -763,6 +846,10 @@ export class CInterpreter {
         return `${e.name}${e.indices.map((i) => `[${this.exprToString(i)}]`).join("")}`;
       case "ternary":
         return `${this.exprToString(e.cond)} ? ${this.exprToString(e.a)} : ${this.exprToString(e.b)}`;
+      case "scanfcall": {
+        const alvos = e.targets.map((t) => "&" + t.name).join(", ");
+        return `scanf("${e.fmt}"${alvos ? ", " + alvos : ""})`;
+      }
     }
   }
 
@@ -905,6 +992,21 @@ export class CInterpreter {
             return a >= b ? 1 : 0;
         }
         return 0;
+      }
+      case "scanfcall": {
+        // O valor foi publicado pelo 'scanf-expr-done' depois da leitura; é
+        // consumido aqui para que a próxima volta do laço leia de novo.
+        if (this.callResults.has(e)) {
+          const v = this.callResults.get(e)!;
+          this.callResults.delete(e);
+          return v;
+        }
+        // Sem leitura prévia significa que a expressão foi avaliada fora dos
+        // pontos que sabem pausar (ex.: dentro de uma função chamada por
+        // expressão) — mesma limitação do comando scanf nesse contexto.
+        throw new Error(
+          `O scanf da linha ${e.line} está num lugar onde a execução não consegue parar para pedir a entrada. Escreva-o em uma linha própria: scanf("${e.fmt}", ...);`,
+        );
       }
       case "ternary": {
         return this.truthy(this.evalExpr(e.cond, scope))
@@ -1318,6 +1420,22 @@ export class CInterpreter {
       }
       case "while-check": {
         const loop = task.loopKind === "dowhile" ? "do-while" : "while";
+        // A condição pode conter um scanf (`while (scanf("%d", &n) == 1)`): a
+        // leitura pausa a execução, então roda ANTES, e a condição é avaliada
+        // na volta. Só o scanf é resolvido aqui — chamadas de função e pinos
+        // seguem o caminho de sempre.
+        const pend = this.collectCallsInExpr(task.cond, task.scope).filter(
+          (c) => c.kind === "scanfx",
+        );
+        if (pend.length > 0) {
+          this.stack.push(task);
+          this.pushPendingCalls(pend, task.scope, task.line);
+          return {
+            kind: "noop",
+            line: task.line,
+            message: `A condição do ${loop} usa scanf — lendo a entrada antes de testá-la.`,
+          };
+        }
         const ok = this.truthy(this.evalExpr(task.cond, task.scope));
         if (ok) {
           this.stack.push(task); // re-avalia depois
@@ -1349,6 +1467,20 @@ export class CInterpreter {
       }
       case "for-cond": {
         const f = task.forStmt;
+        // Mesmo caso do while: um scanf na condição lê antes de ela ser testada.
+        const pendFor = this.collectCallsInExpr(f.cond, task.scope).filter(
+          (c) => c.kind === "scanfx",
+        );
+        if (pendFor.length > 0) {
+          this.stack.push(task);
+          this.pushPendingCalls(pendFor, task.scope, f.line);
+          return {
+            kind: "noop",
+            line: f.line,
+            message: "A condição do for usa scanf — lendo a entrada antes de testá-la.",
+            highlight: f.condRange ?? { line: f.line, colStart: 1, colEnd: 9999 },
+          };
+        }
         const ok = f.cond ? this.truthy(this.evalExpr(f.cond, task.scope)) : true;
         if (ok) {
           this.stack.push({ kind: "for-step", forStmt: f, scope: task.scope });
@@ -1377,6 +1509,37 @@ export class CInterpreter {
           line: f.line,
           message: "for: incremento",
           highlight: f.stepRange ?? { line: f.line, colStart: 1, colEnd: 9999 },
+        };
+      }
+      case "scanf-expr": {
+        // Já lido (executando o passo seguinte)? Nada a fazer.
+        if (this.callResults.has(task.expr)) return { kind: "noop", line: task.line, message: "" };
+        const n = task.expr.targets.length;
+        // LIFO: o 'done' entra primeiro e roda por último, depois que o comando
+        // scanf tiver lido todos os alvos (ele empilha um resto por alvo).
+        this.stack.push({
+          kind: "scanf-expr-done",
+          callExpr: task.expr,
+          count: n,
+          line: task.line,
+        });
+        this.stack.push({
+          kind: "stmt",
+          stmt: { k: "scanf", fmt: task.expr.fmt, targets: task.expr.targets, line: task.line },
+          scope: task.scope,
+        });
+        return {
+          kind: "noop",
+          line: task.line,
+          message: `O scanf da linha ${task.line} é lido primeiro; o valor dele (quantos itens leu) entra na expressão depois.`,
+        };
+      }
+      case "scanf-expr-done": {
+        this.callResults.set(task.callExpr, task.count);
+        return {
+          kind: "noop",
+          line: task.line,
+          message: `scanf leu ${task.count} ${task.count === 1 ? "valor" : "valores"} — é esse o resultado do scanf na expressão.`,
         };
       }
       case "scanf-pending": {
@@ -1429,58 +1592,58 @@ export class CInterpreter {
   }
 
   /**
-   * Coleta chamadas que precisam ser executadas passo-a-passo ANTES da stmt:
+   * Coleta chamadas dentro de UMA expressão que precisam rodar passo-a-passo:
    *  - chamadas a funções definidas pelo usuário (kind 'fn');
-   *  - chamadas a digitalRead/analogRead (kind 'pin') — abrem diálogo de entrada.
+   *  - chamadas a digitalRead/analogRead (kind 'pin') — abrem diálogo de entrada;
+   *  - `scanf` usado como expressão (kind 'scanfx') — idem.
+   * Itens já resolvidos (valor no cache `callResults`) ficam de fora: é o que
+   * permite chamar de novo a cada volta do laço sem repetir a mesma leitura.
    */
-  private collectUserCalls(
-    s: Stmt,
-    scope: string,
-  ): Array<
-    | { kind: "fn"; expr: Extract<Expr, { k: "call" }>; fn: FnDef }
-    | {
-        kind: "pin";
-        expr: Extract<Expr, { k: "call" }>;
-        fnName: "digitalRead" | "analogRead";
-        pin: number;
-      }
-  > {
-    type Item =
-      | { kind: "fn"; expr: Extract<Expr, { k: "call" }>; fn: FnDef }
-      | {
-          kind: "pin";
-          expr: Extract<Expr, { k: "call" }>;
-          fnName: "digitalRead" | "analogRead";
-          pin: number;
-        };
-    const out: Item[] = [];
-    const visitExpr = (e: Expr | null | undefined) => {
-      if (!e) return;
-      switch (e.k) {
+  private collectCallsInExpr(e: Expr | null | undefined, scope: string): PendingCall[] {
+    const out: PendingCall[] = [];
+    const visitExpr = (x: Expr | null | undefined) => {
+      if (!x) return;
+      switch (x.k) {
         case "call": {
           // Visita argumentos primeiro (chamadas internas executam antes).
-          for (const a of e.args) visitExpr(a);
-          if (e.name === "digitalRead" || e.name === "analogRead") {
+          for (const a of x.args) visitExpr(a);
+          if (this.callResults.has(x)) break;
+          if (x.name === "digitalRead" || x.name === "analogRead") {
             // Avalia o argumento (número do pino) — pode usar valores em cache.
-            const pin = Math.trunc(Number(this.evalExpr(e.args[0] ?? { k: "num", v: 0 }, scope)));
-            out.push({ kind: "pin", expr: e, fnName: e.name, pin });
+            const pin = Math.trunc(Number(this.evalExpr(x.args[0] ?? { k: "num", v: 0 }, scope)));
+            out.push({ kind: "pin", expr: x, fnName: x.name, pin });
           } else {
-            const fn = this.fns[e.name];
-            if (fn) out.push({ kind: "fn", expr: e, fn });
+            const fn = this.fns[x.name];
+            if (fn) out.push({ kind: "fn", expr: x, fn });
           }
           break;
         }
+        case "scanfcall":
+          if (!this.callResults.has(x)) out.push({ kind: "scanfx", expr: x });
+          break;
         case "bin":
-          visitExpr(e.a);
-          visitExpr(e.b);
+          visitExpr(x.a);
+          visitExpr(x.b);
           break;
         case "un":
-          visitExpr(e.a);
+          visitExpr(x.a);
           break;
         case "assign":
-          visitExpr(e.v);
+          visitExpr(x.v);
           break;
       }
+    };
+    visitExpr(e);
+    return out;
+  }
+
+  /**
+   * Coleta chamadas que precisam ser executadas passo-a-passo ANTES da stmt.
+   */
+  private collectUserCalls(s: Stmt, scope: string): PendingCall[] {
+    const out: PendingCall[] = [];
+    const visitExpr = (e: Expr | null | undefined) => {
+      out.push(...this.collectCallsInExpr(e, scope));
     };
     switch (s.k) {
       case "decl":
@@ -1504,6 +1667,34 @@ export class CInterpreter {
       // for/scanf/block: chamadas dentro de sub-stmts serão tratadas quando executadas
     }
     return out;
+  }
+
+  /** Empilha as tarefas de `collectCallsInExpr` na ordem em que devem rodar. */
+  private pushPendingCalls(calls: PendingCall[], scope: string, line: number) {
+    // Empilha em ordem reversa (LIFO) — primeira chamada executa primeiro.
+    for (let i = calls.length - 1; i >= 0; i--) {
+      const c = calls[i];
+      if (c.kind === "fn") {
+        this.stack.push({
+          kind: "fn-call-start",
+          fn: c.fn,
+          args: c.expr.args,
+          argScope: scope,
+          callExpr: c.expr,
+        });
+      } else if (c.kind === "pin") {
+        this.stack.push({
+          kind: "pin-read",
+          fn: c.fnName,
+          pin: c.pin,
+          callExpr: c.expr,
+          line,
+          scope,
+        });
+      } else {
+        this.stack.push({ kind: "scanf-expr", expr: c.expr, scope, line: c.expr.line || line });
+      }
+    }
   }
 
   /** Executa 'break': desempilha tarefas até o laço/switch mais interno. */
@@ -1534,28 +1725,7 @@ export class CInterpreter {
         this.announcedCalls.add(s);
         // Re-empilha a stmt para ser executada DEPOIS que todas as chamadas rodarem.
         this.stack.push({ kind: "stmt", stmt: s, scope });
-        // Empilha em ordem reversa (LIFO) — primeira chamada executa primeiro.
-        for (let i = calls.length - 1; i >= 0; i--) {
-          const c = calls[i];
-          if (c.kind === "fn") {
-            this.stack.push({
-              kind: "fn-call-start",
-              fn: c.fn,
-              args: c.expr.args,
-              argScope: scope,
-              callExpr: c.expr,
-            });
-          } else {
-            this.stack.push({
-              kind: "pin-read",
-              fn: c.fnName,
-              pin: c.pin,
-              callExpr: c.expr,
-              line: s.line,
-              scope,
-            });
-          }
-        }
+        this.pushPendingCalls(calls, scope, s.line);
         return {
           kind: "noop",
           line: s.line,

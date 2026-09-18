@@ -95,6 +95,15 @@ então o working tree não fica sujo após o deploy.
   analisado vira `scanf(, &n` — o `&` de endereço era acusado de `&&` mal
   digitado. Usar `balancedParens`; e o `&` só é "bit a bit" quando vem depois
   de um operando (`followsOperand`), nunca em `&n`.
+- **`scanf` vale como comando E como expressão**: em `while (scanf("%d", &n) && ...)`
+  o parser produz a Expr `scanfcall` (`parseScanfParts` é compartilhada com o
+  comando). A leitura não pode acontecer dentro do `evalExpr` — ela PAUSA a
+  execução —, então o `scanf-expr` empilha o comando `scanf` de sempre e um
+  `scanf-expr-done` por baixo, que publica em `callResults` o número de itens
+  lidos; o `evalExpr` consome esse valor e o apaga, para que a volta seguinte do
+  laço leia de novo. Por isso `while-check` e `for-cond` resolvem as pendências
+  de scanf da condição ANTES de avaliá-la (só as de scanf: chamadas de função e
+  leituras de pino seguem o caminho de sempre).
 - **Basepath**: o `createRouter` tem `basepath: "/logica-passo-a-passo"` e o Vite
   tem `base: "/logica-passo-a-passo/"`. Ambos são necessários — sem um deles ou a
   página fica em branco ou o roteador mostra 404.
