@@ -604,7 +604,7 @@ function Index() {
       <InputDialog
         open={!!state?.awaitingInput}
         prompt={state?.awaitingInput?.prompt ?? ""}
-        type={state?.awaitingInput?.type ?? ""}
+        type={state?.awaitingInput?.text ? "texto" : (state?.awaitingInput?.type ?? "")}
         pinRead={state?.awaitingInput?.pinRead ?? null}
         onSubmit={provideInput}
       />

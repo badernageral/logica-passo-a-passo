@@ -58,6 +58,12 @@ export interface InterpreterState {
     prompt: string;
     indices?: number[];
     scope?: string;
+    /**
+     * `scanf("%s", nome)`: o alvo é um vetor de char inteiro (ou uma linha de
+     * uma matriz de char) e recebe uma palavra, letra por letra, mais o '\0'.
+     * `size` é quantas posições o vetor tem — cabem `size - 1` letras.
+     */
+    text?: { size: number };
     /** Quando a entrada vem de uma leitura de pino do Arduino (digitalRead/analogRead). */
     pinRead?: { fn: "digitalRead" | "analogRead"; pin: number; callExpr: Expr };
   };

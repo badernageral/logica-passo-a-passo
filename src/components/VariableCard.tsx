@@ -9,7 +9,11 @@ const TYPE_COLORS: Record<string, string> = {
 };
 
 function formatScalar(type: string, value: number | string, name?: string): string {
-  if (type === "char") return `'${value === "\n" ? "\\n" : value}'`;
+  if (type === "char") {
+    if (value === "\n") return "'\\n'";
+    if (value === "\0") return "'\\0'";
+    return `'${value}'`;
+  }
   if (type === "float" || type === "double") return Number(value).toFixed(2);
 
   const numericValue = typeof value === "number" ? value : Number(value);
@@ -29,6 +33,12 @@ function formatScalar(type: string, value: number | string, name?: string): stri
 
 /** Espaço rígido: mantém a altura da linha quando a variável ainda não tem valor. */
 const EMPTY = " ";
+
+/** Texto C guardado num vetor de char: as letras até o '\0' (null se não houver '\0'). */
+function cString(cells: (number | string)[], uninit?: boolean[]): string | null {
+  const end = cells.findIndex((c, i) => c === "\0" && !uninit?.[i]);
+  return end < 0 ? null : cells.slice(0, end).join("");
+}
 
 export function VariableCard({ v }: { v: Variable }) {
   const color = TYPE_COLORS[v.type] || "var(--chalk-white)";
@@ -76,6 +86,23 @@ export function VariableCard({ v }: { v: Variable }) {
           {display}
         </div>
       )}
+      {isArray &&
+        !is2D &&
+        v.type === "char" &&
+        (() => {
+          const text = cString(
+            v.value as (number | string)[],
+            v.uninitCells as boolean[] | undefined,
+          );
+          return text === null ? null : (
+            <div
+              className="chalk-text mt-1 font-mono text-xl chalk-glow"
+              style={{ color, fontFamily: "var(--font-mono)" }}
+            >
+              "{text}"
+            </div>
+          );
+        })()}
       {isArray && !is2D && (
         <div className="mt-2 flex flex-wrap gap-1">
           {(v.value as (number | string)[]).map((cell, i) => {

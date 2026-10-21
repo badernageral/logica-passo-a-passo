@@ -733,6 +733,55 @@ export class CInterpreter {
   }
 
   /**
+   * Posições de um texto C: o vetor de char inteiro (`nome`) ou uma linha de
+   * uma matriz de char (`nomes[i]`). Devolve null quando o alvo não é texto.
+   */
+  private textCells(
+    v: Variable,
+    idxs: number[],
+  ): { cells: (number | string)[]; uninit?: boolean[] } | null {
+    if (v.type !== "char" || !v.dims || idxs.length !== v.dims.length - 1) return null;
+    if (v.dims.length === 1) {
+      return {
+        cells: v.value as (number | string)[],
+        uninit: v.uninitCells as boolean[] | undefined,
+      };
+    }
+    const r = idxs[0];
+    if (r < 0 || r >= v.dims[0]) {
+      throw new Error(
+        `Índice fora do limite ao acessar '${v.name}': posição ${r} (válido: 0 a ${v.dims[0] - 1}).`,
+      );
+    }
+    return {
+      cells: (v.value as (number | string)[][])[r],
+      uninit: (v.uninitCells as boolean[][] | undefined)?.[r],
+    };
+  }
+
+  /**
+   * Valor de um argumento do printf que é texto C (`printf("%s", nome)`): as
+   * letras até o '\0'. Uma posição ainda sem valor também encerra — em C ali
+   * haveria lixo de memória, que o simulador não tem como imitar.
+   */
+  private textArg(e: Expr, scope: string): string | null {
+    if (e.k !== "ident" && e.k !== "index") return null;
+    const v = this.findVar(e.name, scope);
+    if (!v) return null;
+    const idxs =
+      e.k === "index" ? e.indices.map((ix) => Math.trunc(Number(this.evalExpr(ix, scope)))) : [];
+    const slot = this.textCells(v, idxs);
+    if (!slot) return null;
+    let out = "";
+    for (let i = 0; i < slot.cells.length; i++) {
+      const c = slot.cells[i];
+      if (slot.uninit?.[i] || c === "\0" || c === "") break;
+      out += c;
+    }
+    return out;
+  }
+
+  /**
    * Declara a variável no escopo, substituindo uma homônima já existente.
    *
    * Redeclaração de verdade já foi barrada por `findRedeclarations` antes de
@@ -1258,7 +1307,8 @@ export class CInterpreter {
     let ai = 0;
     const out = formatPrintf(s.fmt, () => {
       const arg = s.args[ai++];
-      return arg !== undefined ? this.evalExpr(arg, scope) : "";
+      if (arg === undefined) return "";
+      return this.textArg(arg, scope) ?? this.evalExpr(arg, scope);
     });
     // dividir em linhas para o console — preserva quebras
     const lines = out.split("\n");
@@ -1772,8 +1822,11 @@ export class CInterpreter {
         const v = this.findVar(tgt.name, scope);
         if (!v) throw new Error(`Variável '${tgt.name}' não declarada (scanf).`);
         // Sem o '&', o scanf recebe o VALOR e não teria onde guardar a leitura.
-        // A exceção é o nome de um vetor, que já é o endereço do primeiro item.
-        if (!tgt.byAddress && !(v.dims && !tgt.indices)) {
+        // A exceção é o nome de um vetor (ou uma linha de matriz, `nomes[i]`),
+        // que já é o endereço do primeiro item.
+        const given = tgt.indices?.length ?? 0;
+        const wholeArray = !!v.dims && given < v.dims.length;
+        if (!tgt.byAddress && !wholeArray) {
           throw new Error(
             `Faltou o '&' antes de '${tgt.name}' no scanf da linha ${s.line}. O scanf precisa do ENDEREÇO da variável para guardar o valor lido: scanf("...", &${tgt.name});`,
           );
@@ -1781,7 +1834,7 @@ export class CInterpreter {
         // O scanf escreve na memória da variável: um formato de outro tipo
         // guardaria o valor errado (aqui o tipo do alvo é conhecido de verdade).
         if (tgt.spec) {
-          const kind = kindOfType(v.type, !!v.dims && !tgt.indices);
+          const kind = kindOfType(v.type, wholeArray);
           const problem = kind && formatMismatch(tgt.spec, kind, tgt.name, v.type, "scanf");
           if (problem) throw new Error(`${problem} (linha ${s.line})`);
         }
@@ -1793,12 +1846,18 @@ export class CInterpreter {
           ? tgt.indices.map((ix) => Math.trunc(Number(this.evalExpr(ix, scope))))
           : undefined;
         const display = idxs ? `${tgt.name}[${idxs.join("][")}]` : tgt.name;
+        // `scanf("%s", nome)`: o vetor de char inteiro recebe uma palavra.
+        const asText = !!this.textCells(v, idxs ?? []);
+        const size = v.dims ? v.dims[v.dims.length - 1] : 0;
         this.state.awaitingInput = {
           varName: tgt.name,
           type: v.type,
-          prompt: `Digite o valor para '${display}' (${v.type}):`,
+          prompt: asText
+            ? `Digite um texto para '${display}' (char[${size}] — cabem até ${size - 1} letras):`
+            : `Digite o valor para '${display}' (${v.type}):`,
           indices: idxs,
           scope,
+          ...(asText ? { text: { size } } : {}),
         };
         return {
           kind: "input-request",
@@ -1978,7 +2037,10 @@ export class CInterpreter {
       return ev;
     }
 
-    // Caso 2: scanf tradicional.
+    // Caso 2: scanf("%s") num vetor de char.
+    if (ai.text) return this.provideText(raw);
+
+    // Caso 3: scanf tradicional.
     const varName = ai.varName!;
     const { type, indices, scope } = ai;
     let val: number | string = raw;
@@ -2013,6 +2075,60 @@ export class CInterpreter {
       kind: "update-var",
       line: this.state.currentLine,
       message: `'${display}' recebeu o valor digitado.`,
+      varName,
+    };
+    this.state.lastEvent = ev;
+    return ev;
+  }
+
+  /**
+   * `scanf("%s", nome)`: guarda a palavra digitada letra por letra no vetor e
+   * fecha com o '\0'. Como em C, o %s para no primeiro espaço; e um texto que
+   * não cabe (as letras + o '\0') invadiria a memória vizinha — aqui vira erro.
+   */
+  private provideText(raw: string): StepEvent {
+    const ai = this.state.awaitingInput!;
+    const varName = ai.varName!;
+    const idxs = ai.indices ?? [];
+    const display = ai.indices ? `${varName}[${idxs.join("][")}]` : varName;
+    const words = raw.trim().split(/\s+/).filter(Boolean);
+    const word = words[0] ?? "";
+    const fail = (msg: string): StepEvent => {
+      this.state.error = msg;
+      this.state.awaitingInput = null;
+      this.state.finished = true;
+      return { kind: "error", line: this.state.currentLine, message: msg };
+    };
+    const v = this.findVar(varName, ai.scope ?? "global");
+    if (!v) return fail(`Variável '${varName}' não encontrada.`);
+    let slot: ReturnType<CInterpreter["textCells"]>;
+    try {
+      slot = this.textCells(v, idxs);
+    } catch (e) {
+      return fail(errorMessage(e));
+    }
+    if (!slot) return fail(`'${display}' não é um vetor de char.`);
+    const size = slot.cells.length;
+    if (word.length > size - 1) {
+      return fail(
+        `O texto "${word}" tem ${word.length} letras, mas '${display}' é char[${size}]: cabem no máximo ${size - 1} letras + o '\\0' que marca o fim do texto. Aumente o tamanho do vetor (ex.: char ${varName}[${word.length + 1}]).`,
+      );
+    }
+    this.clearFlags();
+    for (let i = 0; i <= word.length; i++) {
+      slot.cells[i] = i < word.length ? word[i] : "\0";
+      if (slot.uninit) slot.uninit[i] = false;
+    }
+    v.justChanged = true;
+    this.state.awaitingInput = null;
+    this.syncState();
+    const rest = words.slice(1).join(" ");
+    const ev: StepEvent = {
+      kind: "update-var",
+      line: this.state.currentLine,
+      message:
+        `'${display}' recebeu "${word}" — ${word.length} letras e o '\\0' na posição ${word.length}, marcando o fim do texto.` +
+        (rest ? `\nO %s lê só até o primeiro espaço: "${rest}" ficou de fora.` : ""),
       varName,
     };
     this.state.lastEvent = ev;

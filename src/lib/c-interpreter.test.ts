@@ -236,6 +236,39 @@ describe("Linguagem C — entrada (scanf)", () => {
     expect(run(src, ["Ana"]).state.error).toBeFalsy();
   });
 
+  it("%s guarda o texto letra por letra, fecha com '\\0' e o printf o lê de volta", () => {
+    const src = `#include <stdio.h>\nint main() {\n\tchar a[10];\n\tscanf("%s",a);\n\tprintf("%s",a);\n}`;
+    expect(out(src, ["ola"])).toBe("ola");
+
+    const interp = new CInterpreter(src);
+    while (!interp.state.awaitingInput) interp.step();
+    interp.provideInput("ola");
+    const a = interp.state.variables.find((v) => v.name === "a")!;
+    expect((a.value as string[]).slice(0, 4)).toEqual(["o", "l", "a", "\0"]);
+    expect((a.uninitCells as boolean[]).slice(0, 5)).toEqual([false, false, false, false, true]);
+  });
+
+  it("%s para no primeiro espaço, como em C", () => {
+    const src = `#include <stdio.h>\nint main(){ char a[10]; scanf("%s", a); printf("[%s]", a); }`;
+    expect(out(src, ["José Silva"])).toBe("[José]");
+  });
+
+  it("%s respeita largura e precisão do printf", () => {
+    const src = `#include <stdio.h>\nint main(){ char a[10]; scanf("%s", &a); printf("[%5s|%-4s|%.1s]", a, a, a); }`;
+    expect(out(src, ["ab"])).toBe("[   ab|ab  |a]");
+  });
+
+  it("texto maior que o vetor (contando o '\\0') não executa", () => {
+    const src = `#include <stdio.h>\nint main(){ char a[4]; scanf("%s", a); }`;
+    expect(run(src, ["abc"]).state.error).toBeFalsy();
+    expect(run(src, ["abcd"]).state.error).toMatch(/4 letras.*char\[4\].*no máximo 3/);
+  });
+
+  it("linha de matriz de char funciona como texto (nomes[i])", () => {
+    const src = `#include <stdio.h>\nint main(){ char nomes[3][8]; int i;\n for(i=0;i<3;i++) scanf("%s", nomes[i]);\n for(i=2;i>=0;i--) printf("%s ", nomes[i]);\n printf("%c", nomes[0][1]); }`;
+    expect(out(src, ["ana", "bia", "caio"])).toBe("caio bia ana n");
+  });
+
   it("posição de vetor exige o '&', como em C", () => {
     const ok = `#include <stdio.h>\nint main(){ int v[3]; scanf("%d", &v[0]); printf("%d", v[0]); }`;
     expect(out(ok, ["7"])).toBe("7");
