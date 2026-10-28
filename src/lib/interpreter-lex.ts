@@ -5,6 +5,7 @@ import type {
   FnDef,
   Range,
   ArrayInit,
+  FnParam,
   ScanfTarget,
   Directive,
 } from "./interpreter-types";
@@ -332,12 +333,30 @@ export class Parser {
     const retType = this.parseType();
     const name = this.eat("id").v;
     this.eat("(");
-    const params: { type: CType; name: string }[] = [];
+    const params: FnParam[] = [];
     if (!this.match(")")) {
       do {
         const pt = this.parseType() as CType;
         const pn = this.eat("id").v;
-        params.push({ type: pt, name: pn });
+        // Parâmetro vetor: `int v[]`, `int v[10]`, `int m[][3]`. Em C o tamanho
+        // da 1ª dimensão é ignorado — a função usa o vetor de quem chamou.
+        const dims: number[] = [];
+        while (this.match("[")) {
+          this.eat("[");
+          dims.push(this.match("num") ? parseInt(this.eat("num").v, 10) : 0);
+          this.eat("]");
+        }
+        if (dims.length > 2) {
+          throw new Error(
+            `O parâmetro '${pn}' da função '${name}' tem ${dims.length} dimensões; o simulador aceita vetores e matrizes (até 2).`,
+          );
+        }
+        if (dims.length === 2 && !dims[1]) {
+          throw new Error(
+            `No parâmetro '${pn}[][]' da função '${name}' falta o número de colunas: em C só o tamanho da 1ª dimensão pode ficar vazio. Escreva, por exemplo, '${pn}[][3]'.`,
+          );
+        }
+        params.push(dims.length ? { type: pt, name: pn, dims } : { type: pt, name: pn });
       } while (this.match(",") && (this.eat(","), true));
     }
     this.eat(")");
@@ -395,8 +414,16 @@ export class Parser {
       const name = this.eat("id").v;
       // Suporte a arrays: int a[5];  int m[3][4];
       const dims: number[] = [];
+      // `char nome[] = "Ana";` — o tamanho sai do texto (letras + '\0').
+      let sizeFromInit = false;
       while (this.match("[")) {
         this.eat("[");
+        if (dims.length === 0 && this.match("]")) {
+          this.eat("]");
+          sizeFromInit = true;
+          dims.push(0);
+          continue;
+        }
         const sizeTok = this.eat("num");
         const n = parseInt(sizeTok.v, 10);
         if (!Number.isFinite(n) || n <= 0) {
@@ -413,9 +440,26 @@ export class Parser {
         this.eat("=");
         if (dims.length > 0 && this.match("{")) {
           arrayInit = this.parseArrayInitLiteral(dims.length);
+          if (sizeFromInit) dims[0] = Math.max(1, arrayInit.length);
+        } else if (type === "char" && dims.length === 1 && this.match("str")) {
+          // `char nome[10] = "Ana";` grava letra por letra e fecha com '\0';
+          // como em C, as posições que sobram também ficam com '\0'.
+          const text = this.eat("str").v;
+          if (sizeFromInit) dims[0] = text.length + 1;
+          if (text.length + 1 > dims[0]) {
+            throw new Error(
+              `O texto "${text}" tem ${text.length} letras e não cabe em '${name}' (char[${dims[0]}]) na linha ${line}: é preciso espaço também para o '\\0' que marca o fim — use char ${name}[${text.length + 1}] ou maior.`,
+            );
+          }
+          arrayInit = [...text, ...new Array<string>(dims[0] - text.length).fill("\0")];
         } else {
           init = this.parseExpr();
         }
+      }
+      if (sizeFromInit && !arrayInit) {
+        throw new Error(
+          `O vetor '${name}' na linha ${line} foi declarado sem tamanho ('${name}[]'): nesse caso é preciso inicializá-lo, com {…} ou com um texto entre aspas, para o C saber quantas posições reservar.`,
+        );
       }
       items.push({ name, init, dims: dims.length ? dims : undefined, arrayInit });
     } while (this.match(",") && (this.eat(","), true));

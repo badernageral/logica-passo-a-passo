@@ -104,6 +104,12 @@ então o working tree não fica sujo após o deploy.
   laço leia de novo. Por isso `while-check` e `for-cond` resolvem as pendências
   de scanf da condição ANTES de avaliá-la (só as de scanf: chamadas de função e
   leituras de pino seguem o caminho de sempre).
+- **Parâmetro vetor compartilha os arrays do original**: `int v[]` não copia —
+  o `arrayParam` aponta `value`/`uninitCells` do parâmetro para os MESMOS
+  arrays da variável de quem chamou (ou para a linha, em `m[i]`), e `alias`
+  guarda de onde veio para o `markAliasChanged` acender o cartão original.
+  Qualquer código que troque `v.value` de um vetor por um array novo quebra
+  essa ligação: escrever sempre célula a célula.
 - **Basepath**: o `createRouter` tem `basepath: "/logica-passo-a-passo"` e o Vite
   tem `base: "/logica-passo-a-passo/"`. Ambos são necessários — sem um deles ou a
   página fica em branco ou o roteador mostra 404.

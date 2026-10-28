@@ -208,6 +208,142 @@ describe("Linguagem C — arrays", () => {
   });
 });
 
+describe("Linguagem C — strlen (<string.h>)", () => {
+  const H = "#include <stdio.h>\n#include <string.h>\n";
+
+  it("conta as letras até o '\\0' de um vetor lido com scanf", () => {
+    const src = H + `int main(){ char a[10]; scanf("%s", a); printf("%d", strlen(a)); }`;
+    expect(out(src, ["ola"])).toBe("3");
+  });
+
+  it("aceita texto entre aspas e vetor inicializado", () => {
+    expect(out(H + `int main(){ printf("%d", strlen("abcde")); }`)).toBe("5");
+    const src = H + `int main(){ char a[10] = "oi"; int n = strlen(a); printf("%d", n); }`;
+    expect(out(src)).toBe("2");
+  });
+
+  it("serve de limite num for e funciona com linha de matriz", () => {
+    const loop =
+      H +
+      `int main(){ char a[10]; int i; scanf("%s", a); for(i=0;i<strlen(a);i++) printf("[%c]", a[i]); }`;
+    expect(out(loop, ["abc"])).toBe("[a][b][c]");
+    const mat = H + `int main(){ char n[2][8]; scanf("%s", n[1]); printf("%d", strlen(n[1])); }`;
+    expect(out(mat, ["casa"])).toBe("4");
+  });
+
+  it("char nome[] = \"...\" reserva letras + '\\0' e completa o resto com '\\0'", () => {
+    const src =
+      H +
+      `int main(){ char a[] = "teste"; char b[6] = "oi"; printf("%d %d %s", strlen(a), strlen(b), a); }`;
+    expect(out(src)).toBe("5 2 teste");
+
+    const interp = new CInterpreter(src);
+    while (!interp.state.variables.some((v) => v.name === "b")) interp.step();
+    expect(interp.state.variables.find((v) => v.name === "a")!.dims).toEqual([6]);
+    expect(varValue(interp, "b")).toEqual(["o", "i", "\0", "\0", "\0", "\0"]);
+  });
+
+  it("texto maior que o vetor ou vetor sem tamanho e sem valor não executa", () => {
+    expect(new CInterpreter(H + `int main(){ char a[3] = "abc"; }`).state.error).toMatch(
+      /não cabe em 'a' \(char\[3\]\).*char a\[4\]/,
+    );
+    expect(new CInterpreter(H + `int main(){ char a[]; }`).state.error).toMatch(/sem tamanho/);
+    expect(out(H + `int main(){ int v[] = {4, 5, 6}; printf("%d", v[2]); }`)).toBe("6");
+  });
+
+  it("argumento que não é texto vira erro explicado", () => {
+    const src = H + `int main(){ int x = 3; printf("%d", strlen(x)); }`;
+    expect(run(src).state.error).toMatch(/strlen mede o tamanho de um TEXTO/);
+  });
+});
+
+describe("Vetor como parâmetro de função", () => {
+  const H = "#include <stdio.h>\n#include <string.h>\n";
+
+  it("a função lê o vetor de quem chamou", () => {
+    const src =
+      H +
+      `int soma(int v[], int n) { int i, s = 0; for (i = 0; i < n; i++) s += v[i]; return s; }\nint main() { int notas[4] = {7, 8, 5, 10}; printf("%d", soma(notas, 4)); }`;
+    expect(out(src)).toBe("30");
+  });
+
+  it("o que a função muda no vetor muda o original (não é cópia)", () => {
+    const src =
+      H +
+      `void dobra(int v[], int n) { int i; for (i = 0; i < n; i++) v[i] = v[i] * 2; }\nint main() { int a[3] = {1, 2, 3}; dobra(a, 3); printf("%d %d %d", a[0], a[1], a[2]); }`;
+    expect(out(src)).toBe("2 4 6");
+  });
+
+  it("ordena no lugar (bolha) e aceita o tamanho escrito no parâmetro", () => {
+    const src =
+      H +
+      `void ordena(int v[5], int n) { int i, j, t; for (i = 0; i < n - 1; i++) for (j = 0; j < n - 1 - i; j++) if (v[j] > v[j + 1]) { t = v[j]; v[j] = v[j + 1]; v[j + 1] = t; } }\nint main() { int v[5] = {4, 1, 5, 2, 3}; int i; ordena(v, 5); for (i = 0; i < 5; i++) printf("%d", v[i]); }`;
+    expect(out(src)).toBe("12345");
+  });
+
+  it("scanf e strlen dentro da função usam o vetor recebido", () => {
+    const src =
+      H +
+      `void ler(int v[], int n) { int i; for (i = 0; i < n; i++) scanf("%d", &v[i]); }\nint tam(char s[]) { return strlen(s); }\nvoid lerNome(char s[]) { scanf("%s", s); }\nint main() { int v[2]; char nome[10]; ler(v, 2); lerNome(nome); printf("%d %d %s %d", v[0], v[1], nome, tam(nome)); }`;
+    expect(out(src, ["3", "9", "ana"])).toBe("3 9 ana 3");
+  });
+
+  it("matriz com colunas no parâmetro e linha de matriz como vetor", () => {
+    const mat =
+      H +
+      `int traco(int m[][3]) { return m[0][0] + m[1][1] + m[2][2]; }\nvoid zera(int m[3][3], int i) { m[i][i] = 0; }\nint main() { int m[3][3] = {{1,2,3},{4,5,6},{7,8,9}}; zera(m, 1); printf("%d", traco(m)); }`;
+    expect(out(mat)).toBe("10");
+    const linha =
+      H +
+      `int tam(char s[]) { return strlen(s); }\nint main() { char nomes[2][8]; scanf("%s", nomes[1]); printf("%d", tam(nomes[1])); }`;
+    expect(out(linha, ["casa"])).toBe("4");
+  });
+
+  it("repassar o parâmetro a outra função continua mexendo no original", () => {
+    const src =
+      H +
+      `void um(int v[]) { v[0] = 9; }\nvoid dois(int w[]) { um(w); }\nint main() { int a[2] = {1, 1}; dois(a); printf("%d", a[0]); }`;
+    expect(out(src)).toBe("9");
+  });
+
+  it("o cartão do vetor original acende e o passo explica que não é cópia", () => {
+    const src =
+      H +
+      `void marca(int v[]) {\n  v[1] = 5;\n}\nint main() {\n  int a[3] = {0, 0, 0};\n  marca(a);\n}`;
+    const interp = new CInterpreter(src);
+    const msgs: string[] = [];
+    let a: Variable | undefined;
+    for (let n = 0; n < 50 && !interp.state.finished; n++) {
+      const ev = interp.step();
+      if (ev?.message) msgs.push(ev.message);
+      a = interp.state.variables.find((v) => v.name === "a");
+      if (a && (a.value as number[])[1] === 5) break;
+    }
+    expect(a!.justChanged).toBe(true);
+    expect(a!.lastIndex).toEqual([1]);
+    expect(msgs.join("\n")).toMatch(/'v' é o próprio vetor 'a', não uma cópia/);
+  });
+
+  it("erros de passagem são explicados", () => {
+    const err = (body: string) => run(H + body).state.error;
+    expect(err(`void f(int v[]) {}\nint main() { int x = 1; f(x); }`)).toMatch(
+      /espera um vetor em 'int v\[\]', mas recebeu 'x'/,
+    );
+    expect(err(`void f(int x) {}\nint main() { int a[3]; f(a); }`)).toMatch(
+      /espera um int simples em 'x', mas recebeu o vetor 'a' inteiro/,
+    );
+    expect(err(`void f(int v[]) {}\nint main() { float a[3]; f(a); }`)).toMatch(
+      /vetor de int.*'a' é um vetor de float/,
+    );
+    expect(err(`void f(int m[][2]) {}\nint main() { int m[2][3]; f(m); }`)).toMatch(
+      /2 colunas.*'m' tem 3 colunas/,
+    );
+    expect(new CInterpreter(H + `void f(int m[][]) {}\nint main() {}`).state.error).toMatch(
+      /falta o número de colunas/,
+    );
+  });
+});
+
 describe("Linguagem C — entrada (scanf)", () => {
   it("lê um inteiro e usa no cálculo", () => {
     const src = `#include <stdio.h>\nint main(){ int n; scanf("%d", &n); printf("%d", n * 2); }`;

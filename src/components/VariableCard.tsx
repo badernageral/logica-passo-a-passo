@@ -74,6 +74,13 @@ export function VariableCard({ v }: { v: Variable }) {
         )}
       </div>
       <div className="chalk-text mt-1 text-2xl font-semibold text-foreground">{v.name}</div>
+      {v.alias && (
+        <div className="chalk-text text-xs text-muted-foreground">
+          → é o próprio vetor '{v.alias.name}
+          {v.alias.row !== undefined ? `[${v.alias.row}]` : ""}' de {v.alias.scope.split("#")[0]}{" "}
+          (não é cópia)
+        </div>
+      )}
       {!isArray && (
         <div
           key={String(v.value) + (v.justChanged ? "-c" : "")}

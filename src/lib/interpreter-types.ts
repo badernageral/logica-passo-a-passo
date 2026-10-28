@@ -17,6 +17,12 @@ export interface Variable {
   uninit?: boolean;
   /** Células de vetor/matriz ainda sem valor atribuído (mesma forma de `value`). */
   uninitCells?: boolean[] | boolean[][];
+  /**
+   * Parâmetro vetor (`int v[]`): em C a função recebe o PRÓPRIO vetor de quem
+   * chamou, não uma cópia. As células são compartilhadas com a variável
+   * `name`/`scope` (ou só a linha `row` dela, quando veio `m[i]`).
+   */
+  alias?: { name: string; scope: string; row?: number };
 }
 
 export interface OutputLine {
@@ -187,10 +193,17 @@ export interface ScanfTarget {
   spec?: string;
 }
 
+export interface FnParam {
+  type: CType;
+  name: string;
+  /** Parâmetro vetor/matriz: `int v[]` → [0]; `int m[][3]` → [0, 3]. 0 = tamanho omitido. */
+  dims?: number[];
+}
+
 export interface FnDef {
   name: string;
   retType: CType | "void";
-  params: { type: CType; name: string }[];
+  params: FnParam[];
   body: Stmt[];
   line?: number; // linha da declaração 'int main() {'
   headerEndCol?: number; // coluna final do '{' de abertura (para destaque)

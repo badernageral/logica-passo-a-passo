@@ -29,6 +29,7 @@ import type {
   Expr,
   Stmt,
   FnDef,
+  FnParam,
   ScanfTarget,
   ArrayInit,
   Range,
@@ -710,6 +711,7 @@ export class CInterpreter {
     }
     v.justChanged = true;
     v.lastIndex = idxs.slice();
+    this.markAliasChanged(v, idxs);
   }
 
   private getIndexed(name: string, scope: string, idxs: number[]): number | string {
@@ -1154,10 +1156,7 @@ export class CInterpreter {
         }
         // chamada de função síncrona (sem step-by-step interno; resultado imediato)
         const fn = this.fns[e.name];
-        if (fn) {
-          const args = e.args.map((a) => this.evalExpr(a, scope));
-          return this.callFunctionSync(fn, args);
-        }
+        if (fn) return this.callFunctionSync(fn, e.args, scope);
         // Funções de biblioteca (math.h e afins). Uma função do aluno com o mesmo
         // nome tem precedência — por isso a busca acima vem primeiro.
         const builtin = BUILTIN_FUNCTIONS[e.name];
@@ -1169,9 +1168,26 @@ export class CInterpreter {
           const nums = e.args.map((a) => this.toNumber(this.evalExpr(a, scope)));
           return builtin.fn(nums);
         }
+        if (e.name === "strlen") return this.strlen(e.args[0], scope);
         throw new Error(`Função '${e.name}' não definida.`);
       }
     }
+  }
+
+  /**
+   * `strlen` do `<string.h>`: quantas letras há antes do '\0'. Aceita um texto
+   * entre aspas ou um vetor de char (inteiro ou linha de matriz, `nomes[i]`).
+   */
+  private strlen(arg: Expr | undefined, scope: string): number {
+    if (!arg) throw new Error("A função 'strlen' precisa de 1 argumento: o texto a medir.");
+    if (arg.k === "str") return arg.v.length;
+    const text = this.textArg(arg, scope);
+    if (text === null) {
+      throw new Error(
+        `strlen mede o tamanho de um TEXTO (vetor de char ou "texto entre aspas"), mas recebeu '${this.exprToString(arg)}'.`,
+      );
+    }
+    return text.length;
   }
 
   /** Valor numérico de um argumento — um `char` vale o seu código ASCII. */
@@ -1186,17 +1202,137 @@ export class CInterpreter {
     return v !== 0;
   }
 
-  /** Executa função inteira de forma síncrona (para uso dentro de expressões). */
-  private callFunctionSync(fn: FnDef, args: (number | string)[]): number | string {
-    const scope = fn.name + "#" + Math.random().toString(36).slice(2, 6);
-    fn.params.forEach((p, i) => {
-      this.vars.push({
+  /**
+   * Cria as variáveis dos parâmetros no escopo da função. Os argumentos são
+   * avaliados no escopo de quem chamou, na ordem em que aparecem.
+   */
+  private bindParams(
+    fn: FnDef,
+    args: Expr[],
+    argScope: string,
+    scope: string,
+    justCreated: boolean,
+  ): Variable[] {
+    return fn.params.map((p, i): Variable => {
+      const a = args[i];
+      if (p.dims) return this.arrayParam(fn, p, a, argScope, scope, justCreated);
+      // Vetor inteiro num parâmetro simples: avisar antes do erro genérico do evalExpr.
+      if (a && (a.k === "ident" || a.k === "index")) {
+        const v = this.findVar(a.name, argScope);
+        const given = a.k === "index" ? a.indices.length : 0;
+        if (v?.dims && given < v.dims.length) {
+          throw new Error(
+            `A função '${fn.name}' espera um ${p.type} simples em '${p.name}', mas recebeu o vetor '${this.exprToString(a)}' inteiro. Para passar um item, use o índice (ex.: ${a.name}[0]); para passar o vetor, declare o parâmetro como '${p.type} ${p.name}[]'.`,
+          );
+        }
+      }
+      return {
         name: p.name,
         type: p.type,
-        value: this.coerce(p.type, args[i] ?? 0),
+        value: this.coerce(p.type, a ? this.evalExpr(a, argScope) : 0),
         scope,
-      });
+        justCreated,
+      };
     });
+  }
+
+  /**
+   * Parâmetro vetor: em C a função recebe o endereço do vetor de quem chamou.
+   * Aqui o parâmetro compartilha os MESMOS arrays (`value` e `uninitCells`) da
+   * variável original — escrever em `v[i]` dentro da função muda o original.
+   * Aceita o vetor/matriz inteiro (`notas`) ou uma linha de matriz (`nomes[i]`).
+   */
+  private arrayParam(
+    fn: FnDef,
+    p: FnParam,
+    a: Expr | undefined,
+    argScope: string,
+    scope: string,
+    justCreated: boolean,
+  ): Variable {
+    const decl = `${p.type} ${p.name}[${p.dims!.map((d) => d || "").join("][")}]`;
+    const expectWhat = p.dims!.length === 2 ? "uma matriz" : "um vetor";
+    if (!a)
+      throw new Error(
+        `Faltou passar ${expectWhat} para o parâmetro '${decl}' da função '${fn.name}'.`,
+      );
+    const v = a.k === "ident" || a.k === "index" ? this.findVar(a.name, argScope) : undefined;
+    if (!v || !v.dims) {
+      throw new Error(
+        `A função '${fn.name}' espera ${expectWhat} em '${decl}', mas recebeu '${this.exprToString(a)}'. Passe o nome do vetor, sem índice nem colchetes (ex.: ${fn.name}(notas)).`,
+      );
+    }
+    const idxs =
+      a.k === "index" ? a.indices.map((ix) => Math.trunc(Number(this.evalExpr(ix, argScope)))) : [];
+    const dims = v.dims.slice(idxs.length);
+    if (dims.length !== p.dims!.length) {
+      const got =
+        dims.length === 0
+          ? `o item '${this.exprToString(a)}'`
+          : dims.length === 2
+            ? `a matriz '${v.name}'`
+            : `o vetor '${this.exprToString(a)}'`;
+      throw new Error(
+        `A função '${fn.name}' espera ${expectWhat} em '${decl}', mas recebeu ${got}.`,
+      );
+    }
+    if (v.type !== p.type) {
+      throw new Error(
+        `A função '${fn.name}' espera um vetor de ${p.type} em '${decl}', mas '${v.name}' é um vetor de ${v.type}. Em C os itens de um vetor não são convertidos na passagem — os tipos precisam ser iguais.`,
+      );
+    }
+    if (dims.length === 2 && dims[1] !== p.dims![1]) {
+      throw new Error(
+        `A função '${fn.name}' espera uma matriz com ${p.dims![1]} colunas em '${decl}', mas '${v.name}' tem ${dims[1]} colunas.`,
+      );
+    }
+    let value = v.value as (number | string)[] | (number | string)[][];
+    let uninitCells = v.uninitCells;
+    let row: number | undefined;
+    if (idxs.length === 1) {
+      row = idxs[0];
+      if (row < 0 || row >= v.dims[0]) {
+        throw new Error(
+          `Índice fora do limite ao acessar '${v.name}': posição ${row} (válido: 0 a ${v.dims[0] - 1}).`,
+        );
+      }
+      value = (value as (number | string)[][])[row];
+      uninitCells = (uninitCells as boolean[][] | undefined)?.[row];
+    }
+    return {
+      name: p.name,
+      type: p.type,
+      value,
+      uninitCells,
+      dims,
+      scope,
+      justCreated,
+      alias: { name: v.name, scope: v.scope, ...(row !== undefined ? { row } : {}) },
+    };
+  }
+
+  /**
+   * Uma escrita num parâmetro vetor também acende o cartão do vetor original
+   * (as células já são as mesmas; falta só o destaque visual).
+   */
+  private markAliasChanged(v: Variable, idxs?: number[]) {
+    let cur = v;
+    let at = idxs;
+    while (cur.alias) {
+      const { name, scope, row } = cur.alias;
+      const orig = this.vars.find((x) => x.name === name && x.scope === scope);
+      if (!orig) return;
+      at = at && row !== undefined ? [row, ...at] : at;
+      orig.justChanged = true;
+      if (at) orig.lastIndex = at.slice();
+      cur = orig;
+    }
+  }
+
+  /** Executa função inteira de forma síncrona (para uso dentro de expressões). */
+  private callFunctionSync(fn: FnDef, args: Expr[], argScope: string): number | string {
+    const scope = fn.name + "#" + Math.random().toString(36).slice(2, 6);
+    this.vars.push(...this.bindParams(fn, args, argScope, scope, false));
     let result: number | string = 0;
     try {
       this.runBlockSync(fn.body, scope);
@@ -1428,17 +1564,18 @@ export class CInterpreter {
       case "fn-call-start": {
         const fn = task.fn;
         // Avaliar argumentos no escopo do chamador (já podem ter resultados em cache).
-        const argVals = task.args.map((a) => this.evalExpr(a, task.argScope));
         const newScope = fn.name + "#" + Math.random().toString(36).slice(2, 6);
-        fn.params.forEach((p, i) => {
-          this.vars.push({
-            name: p.name,
-            type: p.type,
-            value: this.coerce(p.type, argVals[i] ?? 0),
-            scope: newScope,
-            justCreated: true,
-          });
-        });
+        const params = this.bindParams(fn, task.args, task.argScope, newScope, true);
+        this.vars.push(...params);
+        // O aluno costuma achar que a função trabalha numa cópia do vetor.
+        const shared = params
+          .filter((p) => p.alias)
+          .map((p) => {
+            const src =
+              p.alias!.row !== undefined ? `${p.alias!.name}[${p.alias!.row}]` : p.alias!.name;
+            return `\nO parâmetro '${p.name}' é o próprio vetor '${src}', não uma cópia: o que a função mudar em '${p.name}' muda em '${src}'.`;
+          })
+          .join("");
         // Empilhar o block-end (com callExpr para gravar valor de retorno) e o corpo.
         this.stack.push({
           kind: "block-end",
@@ -1454,7 +1591,9 @@ export class CInterpreter {
         return {
           kind: "call-function",
           line: fn.line ?? 0,
-          message: `Executando a função '${fn.name}' (definida na linha ${fn.line ?? "?"}) — vamos percorrê-la passo a passo.`,
+          message:
+            `Executando a função '${fn.name}' (definida na linha ${fn.line ?? "?"}) — vamos percorrê-la passo a passo.` +
+            shared,
           highlight: fn.line
             ? { line: fn.line, colStart: 1, colEnd: fn.headerEndCol ?? 9999 }
             : undefined,
@@ -2047,7 +2186,7 @@ export class CInterpreter {
     if (type === "int") val = Math.trunc(parseFloat(raw) || 0);
     else if (type === "float" || type === "double") val = parseFloat(raw) || 0;
     else if (type === "char") val = raw[0] ?? "";
-    const v = this.vars.find((vv) => vv.name === varName);
+    const v = this.findVar(varName, scope ?? "global");
     if (!v) {
       this.state.error = `Variável '${varName}' não encontrada.`;
       this.state.awaitingInput = null;
@@ -2120,6 +2259,7 @@ export class CInterpreter {
       if (slot.uninit) slot.uninit[i] = false;
     }
     v.justChanged = true;
+    this.markAliasChanged(v);
     this.state.awaitingInput = null;
     this.syncState();
     const rest = words.slice(1).join(" ");
