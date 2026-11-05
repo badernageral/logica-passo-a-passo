@@ -34,6 +34,7 @@ import type {
   ArrayInit,
   Range,
   Directive,
+  VarCalc,
 } from "./interpreter-types";
 import { tokenize, Parser } from "./interpreter-lex";
 import {
@@ -109,6 +110,82 @@ function isReturnSignal(e: unknown): e is { __return: number | string } {
 /** Extrai a mensagem de um erro desconhecido capturado em catch. */
 function errorMessage(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
+}
+
+/** Operadores que a animação de conta sabe mostrar, com sua precedência em C. */
+const CALC_PRECEDENCE: Record<string, number> = {
+  "||": 1,
+  "&&": 2,
+  "==": 3,
+  "!=": 3,
+  "<": 4,
+  ">": 4,
+  "<=": 4,
+  ">=": 4,
+  "+": 5,
+  "-": 5,
+  "*": 6,
+  "/": 6,
+  "%": 6,
+};
+
+/** Expressão que pode ser relida sem efeito nenhum (sem chamadas, `++`, atribuição, scanf). */
+function isPureCalc(e: Expr): boolean {
+  switch (e.k) {
+    case "num":
+    case "char":
+    case "ident":
+      return true;
+    case "index":
+      return e.indices.every(isPureCalc);
+    case "un":
+      return (e.op === "-" || e.op === "+" || e.op === "!") && isPureCalc(e.a);
+    case "bin":
+      return e.op in CALC_PRECEDENCE && isPureCalc(e.a) && isPureCalc(e.b);
+    default:
+      return false;
+  }
+}
+
+/**
+ * Reescreve uma expressão pura como texto, com os parênteses que a precedência
+ * exige (a AST não guarda os do fonte). `leaf` decide o texto de variáveis.
+ */
+function exprText(
+  e: Expr,
+  leaf: (e: Expr) => string | undefined,
+  parentPrec = 0,
+  right = false,
+): string {
+  const own = leaf(e);
+  if (own !== undefined) return own;
+  switch (e.k) {
+    case "num":
+      return String(e.v);
+    case "char":
+      return calcValueText("char", e.v);
+    case "un":
+      return e.op + exprText(e.a, leaf, 7);
+    case "bin": {
+      const prec = CALC_PRECEDENCE[e.op];
+      const text = `${exprText(e.a, leaf, prec)} ${e.op} ${exprText(e.b, leaf, prec, true)}`;
+      return prec < parentPrec || (right && prec === parentPrec) ? `(${text})` : text;
+    }
+    default:
+      return "?";
+  }
+}
+
+/** Valor como o cartão da variável o mostra: char entre aspas, real com 2 casas. */
+function calcValueText(type: CType | undefined, value: number | string): string {
+  if (type === "char") {
+    if (value === "\n") return "'\\n'";
+    if (value === "\0") return "'\\0'";
+    return `'${value}'`;
+  }
+  if (type === "float" || type === "double") return Number(value).toFixed(2);
+  const n = Number(value);
+  return n < 0 ? `(${n})` : String(n);
 }
 
 /** Uma variável declarada duas vezes no mesmo bloco. */
@@ -657,6 +734,7 @@ export class CInterpreter {
     for (const v of this.vars) {
       v.justChanged = false;
       v.justCreated = false;
+      delete v.calc;
     }
     for (const r of this.returns) r.justReturned = false;
     for (const p of this.state.pinStates) {
@@ -798,7 +876,12 @@ export class CInterpreter {
     scope: string,
     justCreated: boolean,
   ) {
+    const calc =
+      justCreated && it.init && !it.dims
+        ? this.buildCalc(it.init, scope, { value: 0, empty: true })
+        : undefined;
     const v = this.makeVarFromItem(type, it, scope, justCreated);
+    if (calc) v.calc = calc;
     const at = this.vars.findIndex((x) => x.name === v.name && x.scope === scope);
     if (at >= 0) this.vars[at] = v;
     else this.vars.push(v);
@@ -956,6 +1039,68 @@ export class CInterpreter {
     }
   }
 
+  private calcCounter = 0;
+
+  /** Conta de uma atribuição a `m[i][j]`, com o valor anterior daquela célula. */
+  private indexedCalc(
+    e: Expr,
+    scope: string,
+    target: Variable,
+    idxs: number[],
+  ): VarCalc | undefined {
+    try {
+      const prev = this.getIndexed(target.name, scope, idxs);
+      const cells = target.uninitCells as (boolean | boolean[])[] | undefined;
+      const row = cells?.[idxs[0]];
+      const empty = !!(Array.isArray(row) ? row[idxs[1]] : row);
+      const calc = this.buildCalc(e, scope, { value: prev, empty });
+      if (calc) calc.index = idxs.slice();
+      return calc;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * Descreve a conta de uma atribuição para a animação do cartão. Devolve
+   * undefined quando não há conta a mostrar (um literal sozinho, `x = 5`) ou
+   * quando a expressão tem efeitos colaterais (chamadas, `++`, scanf) — ler os
+   * valores de novo aqui não pode mudar nada nem pausar a execução.
+   */
+  private buildCalc(e: Expr, scope: string, prev: VarCalc["prev"]): VarCalc | undefined {
+    if (!isPureCalc(e) || e.k === "num" || e.k === "char" || e.k === "str") return undefined;
+    if (e.k === "un" && (e.a.k === "num" || e.a.k === "char")) return undefined;
+    try {
+      return {
+        id: ++this.calcCounter,
+        expr: exprText(e, (x) => this.calcLeafText(x, scope, false)),
+        values: exprText(e, (x) => this.calcLeafText(x, scope, true)),
+        prev,
+      };
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** Texto de uma folha da conta: o nome (`a`, `v[i]`) ou o valor guardado nela. */
+  private calcLeafText(e: Expr, scope: string, withValues: boolean): string | undefined {
+    if (e.k === "ident" || e.k === "index") {
+      if (!withValues) {
+        if (e.k === "ident") return e.name;
+        return (
+          e.name +
+          e.indices
+            .map((ix) => `[${exprText(ix, (x) => this.calcLeafText(x, scope, false))}]`)
+            .join("")
+        );
+      }
+      const value = this.evalExpr(e, scope);
+      const v = this.findVar(e.name, scope);
+      return calcValueText(v?.type, value);
+    }
+    return undefined;
+  }
+
   private evalExpr(e: Expr, scope: string): number | string {
     switch (e.k) {
       case "num":
@@ -977,13 +1122,26 @@ export class CInterpreter {
         return this.getIndexed(e.name, scope, idxs);
       }
       case "assign": {
+        // Os valores da conta são lidos ANTES da atribuição: em `c = c + 1`
+        // a animação precisa mostrar o `c` antigo.
+        const target = this.findVar(e.name, scope);
         const v = this.evalExpr(e.v, scope);
         if (e.indices && e.indices.length > 0) {
           const idxs = e.indices.map((ix) => Math.trunc(Number(this.evalExpr(ix, scope))));
+          const calc = target?.dims ? this.indexedCalc(e.v, scope, target, idxs) : undefined;
           this.setIndexed(e.name, scope, idxs, v);
+          if (calc && target) target.calc = calc;
           return this.getIndexed(e.name, scope, idxs);
         }
+        const calc =
+          target && !target.dims
+            ? this.buildCalc(e.v, scope, {
+                value: target.value as number | string,
+                empty: !!target.uninit,
+              })
+            : undefined;
         this.setVar(e.name, scope, v);
+        if (calc && target) target.calc = calc;
         return this.findVar(e.name, scope)!.value as number | string;
       }
       case "un": {

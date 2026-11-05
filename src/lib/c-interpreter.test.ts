@@ -833,3 +833,56 @@ describe("Variáveis sem valor inicial", () => {
     ]);
   });
 });
+
+describe("Conta animada na atribuição (calc)", () => {
+  /** Todas as contas publicadas, na ordem dos passos: "c: a + b → 2 + 3 (antes: vazio)". */
+  function calcs(src: string) {
+    const interp = new CInterpreter(src);
+    const seen: string[] = [];
+    for (let i = 0; i < 500 && !interp.state.finished && !interp.state.error; i++) {
+      interp.step();
+      for (const v of interp.state.variables) {
+        if (!v.calc) continue;
+        const at = v.calc.index ? `[${v.calc.index.join("][")}]` : "";
+        const prev = v.calc.prev.empty ? "vazio" : String(v.calc.prev.value);
+        seen.push(`${v.name}${at}: ${v.calc.expr} → ${v.calc.values} (antes: ${prev})`);
+      }
+    }
+    expect(interp.state.error).toBeNull();
+    return seen;
+  }
+  const main = (body: string) => `#include <stdio.h>\nint main() {\n${body}\n}`;
+
+  it("mostra a soma na declaração e ignora literais sozinhos", () => {
+    expect(calcs(main("int a=2;\nint b=3;\nint c=a+b;"))).toEqual([
+      "c: a + b → 2 + 3 (antes: vazio)",
+    ]);
+  });
+
+  it("lê o valor antigo antes de atribuir (c = c + 1, +=)", () => {
+    expect(calcs(main("int c = 4;\nc = c + 1;\nc += 2;"))).toEqual([
+      "c: c + 1 → 4 + 1 (antes: 4)",
+      "c: c + 2 → 5 + 2 (antes: 5)",
+    ]);
+  });
+
+  it("recoloca os parênteses que a precedência exige e protege negativos", () => {
+    expect(calcs(main("int a = -3;\nint b = 2;\nint r = (a + b) * 2 - (b - a);"))).toEqual([
+      "r: (a + b) * 2 - (b - a) → ((-3) + 2) * 2 - (2 - (-3)) (antes: vazio)",
+    ]);
+  });
+
+  it("atribuição em célula de matriz guarda o índice e o valor anterior", () => {
+    expect(
+      calcs(main("int m[2][2] = {{1,2},{3,4}};\nint i = 1;\nm[i][0] = m[0][1] * 10;")),
+    ).toEqual(["m[1][0]: m[0][1] * 10 → 2 * 10 (antes: 3)"]);
+  });
+
+  it("não anima expressões com efeitos colaterais", () => {
+    expect(
+      calcs(
+        `#include <stdio.h>\nint f(int x) { return x * 2; }\nint main() {\nint a = 1;\nint b = f(a);\nint c = a++;\n}`,
+      ),
+    ).toEqual([]);
+  });
+});

@@ -23,6 +23,25 @@ export interface Variable {
    * `name`/`scope` (ou só a linha `row` dela, quando veio `m[i]`).
    */
   alias?: { name: string; scope: string; row?: number };
+  /**
+   * Conta que produziu o valor atribuído NESTE passo (`c = a + b`), para o
+   * cartão animar `a + b` → `2 + 3` → `= 5` antes de mostrar o resultado.
+   * Só existe para expressões sem efeitos colaterais; some no passo seguinte.
+   */
+  calc?: VarCalc;
+}
+
+export interface VarCalc {
+  /** Muda a cada atribuição — reinicia a animação mesmo com a mesma conta. */
+  id: number;
+  /** A expressão como o aluno escreveu: `a + b`. */
+  expr: string;
+  /** A mesma expressão com os valores no lugar das variáveis: `2 + 3`. */
+  values: string;
+  /** Célula atribuída, quando a variável é vetor/matriz. */
+  index?: number[];
+  /** O que a variável (ou a célula) guardava antes; `empty` = ainda sem valor. */
+  prev: { value: number | string; empty: boolean };
 }
 
 export interface OutputLine {

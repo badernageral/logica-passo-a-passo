@@ -70,6 +70,16 @@ function Index() {
   const [autoDelay, setAutoDelay] = useState<number | null>(null);
   const [showAutoPrompt, setShowAutoPrompt] = useState(false);
   const [autoDelayInput, setAutoDelayInput] = useState("500");
+  /**
+   * Duração da animação de conta nos cartões (`a + b` → `2 + 3` → `= 5`). Na
+   * auto-execução ela cabe dentro do intervalo entre linhas; abaixo de 400 ms
+   * não há tempo para ler, então o valor aparece direto.
+   */
+  const calcMs = !autoRunning
+    ? 2100
+    : autoDelay != null && autoDelay >= 400
+      ? Math.min(2100, autoDelay * 0.8)
+      : 0;
   const autoTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Histórico de ações para permitir "voltar um passo" (replay determinístico).
@@ -529,9 +539,9 @@ function Index() {
                                 {scope === "global" ? "global" : scope.split("#")[0]}
                               </span>
                             </div>
-                            <div className="grid gap-3 grid-cols-[repeat(auto-fill,minmax(180px,1fr))]">
+                            <div className="flex flex-wrap items-start gap-3">
                               {vars.map((v) => (
-                                <VariableCard key={`${v.scope}-${v.name}`} v={v} />
+                                <VariableCard key={`${v.scope}-${v.name}`} v={v} calcMs={calcMs} />
                               ))}
                             </div>
                           </div>

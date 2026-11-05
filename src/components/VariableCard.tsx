@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import type { Variable } from "@/lib/c-interpreter";
 import { cn } from "@/lib/utils";
 
@@ -40,21 +41,58 @@ function cString(cells: (number | string)[], uninit?: boolean[]): string | null 
   return end < 0 ? null : cells.slice(0, end).join("");
 }
 
-export function VariableCard({ v }: { v: Variable }) {
+/**
+ * Fase da animação de conta (`a + b` → `2 + 3` → `2 + 3 = 5`): 0, 1 e 2 são
+ * as etapas; 3 é o fim, quando o resultado entra na variável. Sem conta (ou com
+ * `ms` 0, auto-execução rápida demais para animar) já começa no fim.
+ */
+function useCalcPhase(calcId: number | undefined, ms: number): number {
+  const [done, setDone] = useState<{ id: number; phase: number } | null>(null);
+  useEffect(() => {
+    if (calcId === undefined || ms <= 0) return;
+    const timers = [1, 2, 3].map((phase) =>
+      setTimeout(() => setDone({ id: calcId, phase }), (ms * phase) / 3),
+    );
+    return () => timers.forEach(clearTimeout);
+  }, [calcId, ms]);
+  if (calcId === undefined || ms <= 0) return 3;
+  return done?.id === calcId ? done.phase : 0;
+}
+
+export function VariableCard({ v, calcMs = 0 }: { v: Variable; calcMs?: number }) {
   const color = TYPE_COLORS[v.type] || "var(--chalk-white)";
   const isArray = !!v.dims && v.dims.length > 0;
   const is2D = isArray && v.dims!.length === 2;
+  const calc = v.calc;
+  const phase = useCalcPhase(calc?.id, calcMs);
+  /** Durante a conta a variável (ou a célula) ainda mostra o que guardava antes. */
+  const calculating = !!calc && phase < 3;
+  const cellPending = (i: number, j?: number) =>
+    calculating && calc!.index?.[0] === i && (j === undefined || calc!.index?.[1] === j);
   const display = isArray
     ? ""
-    : v.uninit
-      ? EMPTY
-      : formatScalar(v.type, v.value as number | string, v.name);
+    : calculating
+      ? calc!.prev.empty
+        ? EMPTY
+        : formatScalar(v.type, calc!.prev.value, v.name)
+      : v.uninit
+        ? EMPTY
+        : formatScalar(v.type, v.value as number | string, v.name);
+  const resultText = (() => {
+    if (!calc) return "";
+    if (!calc.index) return formatScalar(v.type, v.value as number | string, v.name);
+    const [i, j] = calc.index;
+    const cell = is2D
+      ? (v.value as (number | string)[][])[i][j]
+      : (v.value as (number | string)[])[i];
+    return formatScalar(v.type, cell);
+  })();
 
   return (
     <div
       className={cn(
-        "relative rounded-md border-2 border-dashed bg-card/30 p-3 transition-all",
-        isArray && "col-span-full",
+        "relative max-w-full rounded-md border-2 border-dashed bg-card/30 p-3 transition-all",
+        !isArray && "min-w-[180px]",
         v.justCreated && "animate-chalk-write",
       )}
       style={{
@@ -81,9 +119,34 @@ export function VariableCard({ v }: { v: Variable }) {
           (não é cópia)
         </div>
       )}
+      {calc && (
+        <div
+          key={phase}
+          className={cn(
+            "chalk-text mt-1 whitespace-nowrap font-mono text-base",
+            phase < 3 && "animate-chalk-write",
+            phase === 3 && "opacity-60",
+          )}
+          style={{ color, fontFamily: "var(--font-mono)" }}
+          aria-live="polite"
+        >
+          {calc.index && (
+            <span className="opacity-60">
+              {v.name}[{calc.index.join("][")}] ={" "}
+            </span>
+          )}
+          {phase === 0 ? calc.expr : calc.values}
+          {phase >= 2 && (
+            <span className="text-foreground">
+              {" "}
+              = <span style={{ color }}>{resultText}</span>
+            </span>
+          )}
+        </div>
+      )}
       {!isArray && (
         <div
-          key={String(v.value) + (v.justChanged ? "-c" : "")}
+          key={String(v.value) + (v.justChanged ? "-c" : "") + (calculating ? "-calc" : "")}
           className={cn(
             "chalk-text mt-1 font-mono text-3xl chalk-glow",
             v.justChanged && "animate-value-pop",
@@ -113,14 +176,18 @@ export function VariableCard({ v }: { v: Variable }) {
       {isArray && !is2D && (
         <div className="mt-2 flex flex-wrap gap-1">
           {(v.value as (number | string)[]).map((cell, i) => {
+            const pending = cellPending(i);
             const highlighted = v.lastIndex && v.lastIndex[0] === i && v.justChanged;
-            const empty = (v.uninitCells as boolean[] | undefined)?.[i];
+            const empty = pending
+              ? calc!.prev.empty
+              : (v.uninitCells as boolean[] | undefined)?.[i];
+            const shown = pending ? calc!.prev.value : cell;
             return (
               <div
-                key={i}
+                key={`${i}${pending ? "-calc" : ""}`}
                 className={cn(
                   "chalk-text flex min-w-[44px] flex-col items-center rounded border px-2 py-1 font-mono",
-                  highlighted && "animate-value-pop",
+                  highlighted && !pending && "animate-value-pop",
                 )}
                 style={{
                   borderColor: color,
@@ -132,28 +199,54 @@ export function VariableCard({ v }: { v: Variable }) {
                 }}
               >
                 <span className="text-[10px] opacity-60">[{i}]</span>
-                <span className="text-base">{empty ? EMPTY : formatScalar(v.type, cell)}</span>
+                <span className="text-base">{empty ? EMPTY : formatScalar(v.type, shown)}</span>
               </div>
             );
           })}
         </div>
       )}
       {is2D && (
-        <div className="mt-2 inline-block">
+        <div className="mt-2 max-w-full overflow-x-auto">
           <table className="border-separate" style={{ borderSpacing: 4 }}>
+            <thead>
+              <tr>
+                <th />
+                {((v.value as (number | string)[][])[0] ?? []).map((_, j) => (
+                  <th
+                    key={j}
+                    scope="col"
+                    className="chalk-text text-center font-mono text-[10px] font-normal opacity-60"
+                    style={{ color, fontFamily: "var(--font-mono)" }}
+                  >
+                    [{j}]
+                  </th>
+                ))}
+              </tr>
+            </thead>
             <tbody>
               {(v.value as (number | string)[][]).map((row, i) => (
                 <tr key={i}>
+                  <th
+                    scope="row"
+                    className="chalk-text pr-1 text-right font-mono text-[10px] font-normal opacity-60"
+                    style={{ color, fontFamily: "var(--font-mono)" }}
+                  >
+                    [{i}]
+                  </th>
                   {row.map((cell, j) => {
+                    const pending = cellPending(i, j);
                     const highlighted =
                       v.lastIndex && v.lastIndex[0] === i && v.lastIndex[1] === j && v.justChanged;
-                    const empty = (v.uninitCells as boolean[][] | undefined)?.[i]?.[j];
+                    const empty = pending
+                      ? calc!.prev.empty
+                      : (v.uninitCells as boolean[][] | undefined)?.[i]?.[j];
+                    const shown = pending ? calc!.prev.value : cell;
                     return (
                       <td
-                        key={j}
+                        key={`${j}${pending ? "-calc" : ""}`}
                         className={cn(
                           "chalk-text rounded border px-2 py-1 text-center font-mono text-sm",
-                          highlighted && "animate-value-pop",
+                          highlighted && !pending && "animate-value-pop",
                         )}
                         style={{
                           borderColor: color,
@@ -166,7 +259,7 @@ export function VariableCard({ v }: { v: Variable }) {
                         }}
                         title={`[${i}][${j}]`}
                       >
-                        {empty ? EMPTY : formatScalar(v.type, cell)}
+                        {empty ? EMPTY : formatScalar(v.type, shown)}
                       </td>
                     );
                   })}
