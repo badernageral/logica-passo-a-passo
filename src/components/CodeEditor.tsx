@@ -147,7 +147,9 @@ function formatVarTooltip(v: Variable): string {
     valStr = v.uninit ? "(sem valor)" : String(v.value);
   }
   const scope = v.scope === "global" ? "global" : v.scope.split("#")[0];
-  return `${v.type}${dims} ${v.name} = ${valStr}\nescopo: ${scope}`;
+  const kind = v.pointer ? " *" : v.ref ? " &" : "";
+  if (v.pointer && !v.uninit && !v.target) valStr = "NULL";
+  return `${v.type}${kind}${dims} ${v.name} = ${valStr}\nescopo: ${scope}`;
 }
 
 function renderHighlighted(text: string, varMap?: Map<string, Variable>): ReactNode {

@@ -375,3 +375,15 @@ int soma(int a, int b){ return a + b; }`;
     expect(ws[0]).toHaveProperty("severity");
   });
 });
+
+describe("Ponteiros e referências", () => {
+  it("scanf num parâmetro ponteiro não pede '&'", () => {
+    const src = `#include <stdio.h>\nvoid ler(int *n) { scanf("%d", n); }\nint main() { int x; ler(&x); printf("%d", x); return 0; }`;
+    expect(messages(src)).not.toMatch(/Faltou o '&'/);
+  });
+
+  it("referência local (int &r = x) conta como declaração", () => {
+    const src = `void setup() { Serial.begin(9600); int x = 3; int &r = x; r = 4; Serial.println(x); }\nvoid loop() {}`;
+    expect(messages(src, "arduino")).not.toMatch(/não foi declarado/);
+  });
+});

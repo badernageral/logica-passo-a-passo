@@ -24,11 +24,30 @@ export interface Variable {
    */
   alias?: { name: string; scope: string; row?: number };
   /**
+   * `int *p`: ponteiro. `target` é a variável (ou célula) para onde aponta —
+   * null quando vale NULL. `value` guarda só o texto do cartão (`&x`, `NULL`).
+   */
+  pointer?: true;
+  target?: VarRef | null;
+  /**
+   * `int &r` (referência do C++, usada no Arduino): outro nome para a variável
+   * `ref`. Ler ou escrever `r` lê ou escreve a original; `value` é só o espelho
+   * que o cartão mostra.
+   */
+  ref?: VarRef;
+  /**
    * Conta que produziu o valor atribuído NESTE passo (`c = a + b`), para o
    * cartão animar `a + b` → `2 + 3` → `= 5` antes de mostrar o resultado.
    * Só existe para expressões sem efeitos colaterais; some no passo seguinte.
    */
   calc?: VarCalc;
+}
+
+/** Um lugar da memória: uma variável escalar ou uma célula de vetor/matriz. */
+export interface VarRef {
+  name: string;
+  scope: string;
+  index?: number[];
 }
 
 export interface VarCalc {
@@ -137,10 +156,15 @@ export type Expr =
   | { k: "ident"; name: string }
   | { k: "bin"; op: string; a: Expr; b: Expr }
   | { k: "un"; op: string; a: Expr }
-  | { k: "assign"; name: string; v: Expr; indices?: Expr[] }
+  /** `deref`: atribuição através do ponteiro `name` — `*p = v`. */
+  | { k: "assign"; name: string; v: Expr; indices?: Expr[]; deref?: true }
   | { k: "call"; name: string; args: Expr[] }
   | { k: "index"; name: string; indices: Expr[] }
   | { k: "ternary"; cond: Expr; a: Expr; b: Expr }
+  /** `&x`: o endereço de uma variável (ou de uma célula, `&v[i]`). */
+  | { k: "addr"; a: Expr }
+  /** `*p`: o valor guardado no endereço para onde o ponteiro `p` aponta. */
+  | { k: "deref"; a: Expr }
   /**
    * `scanf` usado como EXPRESSÃO (ex.: `while (scanf("%d", &n) == 1)`).
    * Em C o scanf devolve quantos itens leu; aqui a leitura acontece nas mesmas
@@ -153,7 +177,7 @@ export type Stmt =
   | {
       k: "decl";
       type: CType;
-      items: { name: string; init: Expr | null; dims?: number[]; arrayInit?: ArrayInit }[];
+      items: DeclItem[];
       line: number;
     }
   | { k: "expr"; e: Expr; line: number }
@@ -193,6 +217,16 @@ export type Stmt =
   | { k: "return"; e: Expr | null; line: number }
   | { k: "block"; body: Stmt[]; line: number; endLine?: number };
 
+export interface DeclItem {
+  name: string;
+  init: Expr | null;
+  dims?: number[];
+  arrayInit?: ArrayInit;
+  /** `int *p` (ponteiro) ou `int &r` (referência). */
+  pointer?: true;
+  ref?: true;
+}
+
 export interface Range {
   line: number;
   colStart: number;
@@ -217,6 +251,10 @@ export interface FnParam {
   name: string;
   /** Parâmetro vetor/matriz: `int v[]` → [0]; `int m[][3]` → [0, 3]. 0 = tamanho omitido. */
   dims?: number[];
+  /** `int *a`: recebe um endereço (passagem por referência ao estilo C). */
+  pointer?: true;
+  /** `int &a`: referência do C++/Arduino — o parâmetro É a variável de quem chamou. */
+  ref?: true;
 }
 
 export interface FnDef {

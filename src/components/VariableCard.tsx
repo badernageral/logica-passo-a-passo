@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { Variable } from "@/lib/c-interpreter";
+import type { VarRef } from "@/lib/interpreter-types";
 import { cn } from "@/lib/utils";
 
 const TYPE_COLORS: Record<string, string> = {
@@ -30,6 +31,12 @@ function formatScalar(type: string, value: number | string, name?: string): stri
   }
 
   return String(value);
+}
+
+/** `x`, `v[2]` — e de qual função, quando não é a do próprio cartão. */
+function placeText(r: VarRef, ownScope: string): string {
+  const name = r.index ? `${r.name}[${r.index.join("][")}]` : r.name;
+  return r.scope === ownScope ? `'${name}'` : `'${name}' de ${r.scope.split("#")[0]}`;
 }
 
 /** Espaço rígido: mantém a altura da linha quando a variável ainda não tem valor. */
@@ -71,13 +78,19 @@ export function VariableCard({ v, calcMs = 0 }: { v: Variable; calcMs?: number }
     calculating && calc!.index?.[0] === i && (j === undefined || calc!.index?.[1] === j);
   const display = isArray
     ? ""
-    : calculating
-      ? calc!.prev.empty
+    : v.pointer
+      ? v.uninit
         ? EMPTY
-        : formatScalar(v.type, calc!.prev.value, v.name)
-      : v.uninit
-        ? EMPTY
-        : formatScalar(v.type, v.value as number | string, v.name);
+        : v.target
+          ? String(v.value)
+          : "NULL"
+      : calculating
+        ? calc!.prev.empty
+          ? EMPTY
+          : formatScalar(v.type, calc!.prev.value, v.name)
+        : v.uninit
+          ? EMPTY
+          : formatScalar(v.type, v.value as number | string, v.name);
   const resultText = (() => {
     if (!calc) return "";
     if (!calc.index) return formatScalar(v.type, v.value as number | string, v.name);
@@ -103,6 +116,7 @@ export function VariableCard({ v, calcMs = 0 }: { v: Variable; calcMs?: number }
       <div className="flex items-baseline justify-between gap-2">
         <span className="chalk-text text-xs uppercase tracking-wider" style={{ color }}>
           {v.type}
+          {v.pointer ? " *" : v.ref ? " &" : ""}
           {isArray ? `[${v.dims!.join("][")}]` : ""}
         </span>
         {v.scope !== "main" && v.scope !== "global" && (
@@ -117,6 +131,16 @@ export function VariableCard({ v, calcMs = 0 }: { v: Variable; calcMs?: number }
           → é o próprio vetor '{v.alias.name}
           {v.alias.row !== undefined ? `[${v.alias.row}]` : ""}' de {v.alias.scope.split("#")[0]}{" "}
           (não é cópia)
+        </div>
+      )}
+      {v.pointer && v.target && (
+        <div className="chalk-text text-xs text-muted-foreground">
+          → aponta para {placeText(v.target, v.scope)}
+        </div>
+      )}
+      {v.ref && (
+        <div className="chalk-text text-xs text-muted-foreground">
+          → é outro nome para {placeText(v.ref, v.scope)} (não é cópia)
         </div>
       )}
       {calc && (

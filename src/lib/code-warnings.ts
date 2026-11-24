@@ -495,8 +495,8 @@ const SCANF_CALL = /\bscanf\s*\(\s*("(?:[^"\\\n]|\\.)*")\s*,([^)]*)\)/g;
  * tem onde guardar o que foi lido. É o erro mais comum do primeiro semestre e
  * o interpretador o aceitaria em silêncio, já que o `&` é opcional na gramática.
  *
- * Duas exceções legítimas, ambas dispensadas aqui: `%s` (o nome de um vetor de
- * char já é um endereço) e qualquer alvo declarado como vetor no próprio fonte.
+ * Exceções legítimas, dispensadas aqui: `%s` (o nome de um vetor de char já é
+ * um endereço) e qualquer alvo declarado como vetor ou ponteiro no próprio fonte.
  */
 function findScanfWithoutAddress(noComments: string): CodeWarning[] {
   const out: CodeWarning[] = [];
@@ -505,6 +505,9 @@ function findScanfWithoutAddress(noComments: string): CodeWarning[] {
   const arrayDeclRe = new RegExp(`\\b(?:${TYPE_KW})\\s+([A-Za-z_]\\w*)\\s*\\[`, "g");
   let am: RegExpExecArray | null;
   while ((am = arrayDeclRe.exec(noComments)) !== null) arrays.add(am[1]);
+  // Ponteiros (`int *n`, típico de `void ler(int *n)`) já guardam um endereço.
+  const pointerDeclRe = new RegExp(`\\b(?:${TYPE_KW})\\s*\\*\\s*([A-Za-z_]\\w*)`, "g");
+  while ((am = pointerDeclRe.exec(noComments)) !== null) arrays.add(am[1]);
 
   SCANF_CALL.lastIndex = 0;
   let m: RegExpExecArray | null;
@@ -779,10 +782,10 @@ function extractNamesFromDeclList(list: string): string[] {
   for (const p of splitTopLevel(list)) {
     // remover inicializador
     const noInit = p.split("=")[0];
-    // remover [...] e *
+    // remover [...], * (ponteiro) e & (referência do C++)
     const cleaned = noInit
       .replace(/\[[^\]]*\]/g, "")
-      .replace(/\*/g, "")
+      .replace(/[*&]/g, "")
       .trim();
     const m = cleaned.match(/^([A-Za-z_]\w*)/);
     if (m) out.push(m[1]);

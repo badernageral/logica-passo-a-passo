@@ -6,6 +6,7 @@ import type {
   Range,
   ArrayInit,
   FnParam,
+  DeclItem,
   ScanfTarget,
   Directive,
 } from "./interpreter-types";
@@ -337,6 +338,9 @@ export class Parser {
     if (!this.match(")")) {
       do {
         const pt = this.parseType() as CType;
+        // `int *a` (ponteiro) ou `int &a` (referência do C++/Arduino): os dois
+        // jeitos de a função alterar a variável de quem chamou.
+        const kind = this.parseDeclarator();
         const pn = this.eat("id").v;
         // Parâmetro vetor: `int v[]`, `int v[10]`, `int m[][3]`. Em C o tamanho
         // da 1ª dimensão é ignorado — a função usa o vetor de quem chamou.
@@ -356,7 +360,16 @@ export class Parser {
             `No parâmetro '${pn}[][]' da função '${name}' falta o número de colunas: em C só o tamanho da 1ª dimensão pode ficar vazio. Escreva, por exemplo, '${pn}[][3]'.`,
           );
         }
-        params.push(dims.length ? { type: pt, name: pn, dims } : { type: pt, name: pn });
+        if (kind && dims.length) {
+          throw new Error(
+            `O parâmetro '${pn}' da função '${name}' mistura '${kind === "pointer" ? "*" : "&"}' com '[]'. Para receber um vetor basta '${pt} ${pn}[]' — o vetor já é passado por referência.`,
+          );
+        }
+        const param: FnParam = { type: pt, name: pn };
+        if (dims.length) param.dims = dims;
+        if (kind === "pointer") param.pointer = true;
+        if (kind === "ref") param.ref = true;
+        params.push(param);
       } while (this.match(",") && (this.eat(","), true));
     }
     this.eat(")");
@@ -406,11 +419,30 @@ export class Parser {
     return { k: "expr", e, line };
   }
 
+  /** `*` (ponteiro) ou `&` (referência) entre o tipo e o nome. */
+  parseDeclarator(): "pointer" | "ref" | null {
+    if (this.match("*")) {
+      this.eat("*");
+      if (this.match("*")) {
+        throw new Error(
+          `Ponteiro para ponteiro ('**') na linha ${this.peek().line}: o simulador aceita só ponteiros simples, como 'int *p'.`,
+        );
+      }
+      return "pointer";
+    }
+    if (this.match("&")) {
+      this.eat("&");
+      return "ref";
+    }
+    return null;
+  }
+
   parseDecl(): Stmt {
     const line = this.peek().line;
     const type = this.parseType() as CType;
-    const items: { name: string; init: Expr | null; dims?: number[]; arrayInit?: ArrayInit }[] = [];
+    const items: DeclItem[] = [];
     do {
+      const kind = this.parseDeclarator();
       const name = this.eat("id").v;
       // Suporte a arrays: int a[5];  int m[3][4];
       const dims: number[] = [];
@@ -461,7 +493,20 @@ export class Parser {
           `O vetor '${name}' na linha ${line} foi declarado sem tamanho ('${name}[]'): nesse caso é preciso inicializá-lo, com {…} ou com um texto entre aspas, para o C saber quantas posições reservar.`,
         );
       }
-      items.push({ name, init, dims: dims.length ? dims : undefined, arrayInit });
+      if (kind && dims.length) {
+        throw new Error(
+          `Na linha ${line}, '${name}' foi declarado com '${kind === "pointer" ? "*" : "&"}' e '[]' ao mesmo tempo: o simulador não aceita vetores de ponteiros. Declare um vetor ('${type} ${name}[…]') ou um ponteiro ('${type} *${name}').`,
+        );
+      }
+      if (kind === "ref" && !init) {
+        throw new Error(
+          `A referência '${name}' na linha ${line} precisa dizer de qual variável ela é outro nome: ${type} &${name} = variavel;`,
+        );
+      }
+      const item: DeclItem = { name, init, dims: dims.length ? dims : undefined, arrayInit };
+      if (kind === "pointer") item.pointer = true;
+      if (kind === "ref") item.ref = true;
+      items.push(item);
     } while (this.match(",") && (this.eat(","), true));
     this.eat(";");
     return { k: "decl", type, items, line };
@@ -740,6 +785,8 @@ export class Parser {
       if (left.k === "ident") return { k: "assign", name: left.name, v: right };
       if (left.k === "index")
         return { k: "assign", name: left.name, v: right, indices: left.indices };
+      if (left.k === "deref")
+        return { k: "assign", name: this.derefName(left), v: right, deref: true };
       throw new Error("Lado esquerdo de '=' inválido");
     }
     if (this.match("+=", "-=", "*=", "/=")) {
@@ -754,9 +801,23 @@ export class Parser {
           v: { k: "bin", op, a: left, b: right },
           indices: left.indices,
         };
+      if (left.k === "deref")
+        return {
+          k: "assign",
+          name: this.derefName(left),
+          v: { k: "bin", op, a: left, b: right },
+          deref: true,
+        };
       throw new Error("Lado esquerdo inválido");
     }
     return left;
+  }
+  /** Nome do ponteiro em `*p = …`. Aritmética de ponteiros (`*(p + 1)`) fica de fora. */
+  derefName(e: Extract<Expr, { k: "deref" }>): string {
+    if (e.a.k === "ident") return e.a.name;
+    throw new Error(
+      `Atribuição através de '*' inválida: o simulador só aceita '*' seguido do nome de um ponteiro, como '*p = 5;'.`,
+    );
   }
   parseTernary(): Expr {
     const cond = this.parseLogicOr();
@@ -826,6 +887,16 @@ export class Parser {
       const op = this.eat().t;
       const a = this.parseUnary();
       return { k: "un", op: "pre" + op, a };
+    }
+    // Em posição de operando, '*' e '&' são os operadores de ponteiro (o '*' de
+    // multiplicação é tratado em parseMul, entre dois operandos).
+    if (this.match("*")) {
+      this.eat("*");
+      return { k: "deref", a: this.parseUnary() };
+    }
+    if (this.match("&")) {
+      this.eat("&");
+      return { k: "addr", a: this.parseUnary() };
     }
     return this.parsePostfix();
   }

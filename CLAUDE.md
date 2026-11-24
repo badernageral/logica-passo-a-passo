@@ -110,6 +110,19 @@ então o working tree não fica sujo após o deploy.
   guarda de onde veio para o `markAliasChanged` acender o cartão original.
   Qualquer código que troque `v.value` de um vetor por um array novo quebra
   essa ligação: escrever sempre célula a célula.
+- **Ponteiro guarda um `VarRef`, não um número**: `int *p` tem `pointer: true`,
+  `target: {name, scope, index?}` e `value` só com o texto do cartão (`&x`, ou 0
+  para NULL). Referência `int &r` tem `ref: VarRef`; o `value` dela é espelho que
+  o `syncState` atualiza. Ler/escrever sempre via `readRef`/`writeRef`, e obter o
+  lugar com `locOf` (segue referências e parâmetros vetor até a variável
+  original — é ela que precisa acender, e ela sobrevive ao fim da função).
+  `&x` não tem valor no `evalExpr`: só é aceito onde um endereço é guardado
+  (`evalAddress`: parâmetro `*`, declaração e atribuição de ponteiro).
+- **Anúncio de chamadas é por execução e por escopo**: `announcedCalls` marca que
+  as chamadas da stmt já rodaram passo a passo e é CONSUMIDO quando a stmt
+  executa. Se ficasse marcado, a 2ª volta de um laço rodaria a função de forma
+  síncrona (e um `scanf` dentro dela quebrava). O escopo na chave evita que a
+  mesma stmt numa recursão se confunda com a de fora.
 - **Basepath**: o `createRouter` tem `basepath: "/logica-passo-a-passo"` e o Vite
   tem `base: "/logica-passo-a-passo/"`. Ambos são necessários — sem um deles ou a
   página fica em branco ou o roteador mostra 404.

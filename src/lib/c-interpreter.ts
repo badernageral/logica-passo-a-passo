@@ -11,6 +11,8 @@
  *  - while ( ... ) { ... }
  *  - for (init; cond; step) { ... }
  *  - Funções com e sem retorno (sem recursão profunda — mas funcional)
+ *  - Passagem por referência: ponteiros simples (`int *a`, `&x`, `*a = …`) e
+ *    referências do C++/Arduino (`int &a`) — sem aritmética de ponteiros
  *  - return expr;
  *
  * A execução é incremental: cada chamada a step() avança UMA "linha lógica"
@@ -32,7 +34,9 @@ import type {
   FnParam,
   ScanfTarget,
   ArrayInit,
+  DeclItem,
   Range,
+  VarRef,
   Directive,
   VarCalc,
 } from "./interpreter-types";
@@ -95,7 +99,19 @@ const ARDUINO_CONSTANTS: Record<string, number> = {
   // Placas com mais entradas analógicas (Mega etc.)
   A6: 20,
   A7: 21,
+  // Ponteiro que não aponta para nada. Um ponteiro NULL também vale 0.
+  NULL: 0,
 };
+
+/** Texto de um lugar da memória: `x`, `v[2]`, `m[1][0]`. */
+function refText(r: VarRef): string {
+  return r.index ? `${r.name}[${r.index.join("][")}]` : r.name;
+}
+
+/** Nome da função dona de um escopo (`troca#a1b2` → `troca`). */
+function scopeLabel(scope: string): string {
+  return scope === "global" ? "global" : scope.split("#")[0];
+}
 
 /** Sinal interno lançado por 'break' e capturado pelo laço/switch que o contém. */
 function isBreakSignal(e: unknown): e is { __break: true } {
@@ -138,6 +154,8 @@ function isPureCalc(e: Expr): boolean {
       return true;
     case "index":
       return e.indices.every(isPureCalc);
+    case "deref":
+      return e.a.k === "ident";
     case "un":
       return (e.op === "-" || e.op === "+" || e.op === "!") && isPureCalc(e.a);
     case "bin":
@@ -332,6 +350,10 @@ function forEachScanfCall(e: Expr, cb: (x: Extract<Expr, { k: "scanfcall" }>) =>
     case "index":
       for (const ix of e.indices) forEachScanfCall(ix, cb);
       break;
+    case "addr":
+    case "deref":
+      forEachScanfCall(e.a, cb);
+      break;
   }
 }
 
@@ -508,8 +530,13 @@ export class CInterpreter {
   private stack: Task[] = [];
   private outputCounter = 0;
   private outputs: OutputLine[] = [];
-  /** Stmts cujas chamadas a funções do usuário já foram anunciadas. */
-  private announcedCalls = new WeakSet<Stmt>();
+  /**
+   * Stmts cujas chamadas a funções do usuário já rodaram passo a passo e que
+   * agora aguardam a própria execução — por escopo, porque numa recursão a
+   * mesma stmt roda de novo dentro da chamada. O anúncio é consumido quando a
+   * stmt executa: na volta seguinte de um laço as chamadas rodam de novo.
+   */
+  private announcedCalls = new WeakMap<Stmt, Set<string>>();
   /** Cache de valores de retorno por nó AST de chamada (preenchido após execução step-by-step). */
   private callResults = new WeakMap<Expr, number | string>();
   private returns: ReturnRecord[] = [];
@@ -725,6 +752,16 @@ export class CInterpreter {
   }
 
   private syncState() {
+    // O cartão de uma referência espelha a variável original.
+    for (const v of this.vars) {
+      if (!v.ref) continue;
+      const orig = this.vars.find((x) => x.name === v.ref!.name && x.scope === v.ref!.scope);
+      if (!orig) continue;
+      const value = this.readRef(v.ref);
+      if (value !== v.value) v.justChanged = true;
+      v.value = value;
+      v.uninit = this.refUninit(v.ref);
+    }
     this.state.variables = [...this.vars];
     this.state.output = [...this.outputs];
     this.state.returns = [...this.returns];
@@ -756,6 +793,13 @@ export class CInterpreter {
     if (v.dims) {
       throw new Error(
         `'${name}' é um vetor/matriz — use índices para atribuir, ex.: '${name}[0] = ...'.`,
+      );
+    }
+    // Referência: `r = 5` escreve na variável original.
+    if (v.ref) return this.writeRef(v.ref, value);
+    if (v.pointer) {
+      throw new Error(
+        `'${name}' é um ponteiro: ele guarda um endereço, e contas com ele (aritmética de ponteiros, como '${name}++') não são suportadas pelo simulador. Para mudar a variável apontada use '*${name}'.`,
       );
     }
     v.value = this.coerce(v.type, value);
@@ -810,6 +854,181 @@ export class CInterpreter {
     }
     if (v.dims.length === 1) return (v.value as (number | string)[])[idxs[0]];
     return (v.value as (number | string)[][])[idxs[0]][idxs[1]];
+  }
+
+  /** A variável de um endereço — erro didático se ela já deixou de existir. */
+  private refVar(r: VarRef): Variable {
+    const v = this.vars.find((x) => x.name === r.name && x.scope === r.scope);
+    if (!v) {
+      throw new Error(
+        `O endereço guardado é o de '${refText(r)}', que não existe mais: era uma variável da função '${scopeLabel(r.scope)}', que já terminou.`,
+      );
+    }
+    return v;
+  }
+
+  private readRef(r: VarRef): number | string {
+    const v = this.refVar(r);
+    if (r.index) return this.getIndexed(v.name, v.scope, r.index);
+    return v.value as number | string;
+  }
+
+  private writeRef(r: VarRef, value: number | string) {
+    const v = this.refVar(r);
+    if (r.index) this.setIndexed(v.name, v.scope, r.index, value);
+    else this.setVar(v.name, v.scope, value);
+  }
+
+  /** O lugar apontado ainda não recebeu valor? */
+  private refUninit(r: VarRef): boolean {
+    const v = this.refVar(r);
+    if (!r.index) return !!v.uninit;
+    const row = (v.uninitCells as (boolean | boolean[])[] | undefined)?.[r.index[0]];
+    return !!(Array.isArray(row) ? row[r.index[1]] : row);
+  }
+
+  /**
+   * Lugar da memória de uma expressão que é variável: `x`, `v[i]` ou `*p`.
+   * Referências e parâmetros vetor são seguidos até a variável original — é
+   * ela que o cartão precisa acender, e ela continua existindo depois que a
+   * função termina.
+   */
+  private locOf(e: Expr, scope: string): VarRef {
+    if (e.k === "deref") return this.pointee(e.a, scope);
+    if (e.k !== "ident" && e.k !== "index") {
+      throw new Error(
+        `'${this.exprToString(e)}' não é uma variável: o '&' (endereço) só pode vir antes do nome de uma variável ou de um item de vetor, como &x ou &v[i].`,
+      );
+    }
+    const v = this.findVar(e.name, scope);
+    if (!v) throw new Error(`Variável '${e.name}' não declarada.`);
+    if (e.k === "ident") {
+      if (v.ref) return v.ref;
+      if (v.dims) {
+        throw new Error(
+          `'${e.name}' é um vetor inteiro: para o endereço de um item use '&${e.name}[0]'; para passar o vetor para uma função, declare o parâmetro como '${v.type} ${e.name}[]'.`,
+        );
+      }
+      return { name: v.name, scope: v.scope };
+    }
+    const idxs = e.indices.map((ix) => Math.trunc(Number(this.evalExpr(ix, scope))));
+    this.getIndexed(e.name, scope, idxs); // confere dimensões e limites
+    let cur = v;
+    let at = idxs;
+    while (cur.alias) {
+      const { name, scope: s, row } = cur.alias;
+      const orig = this.vars.find((x) => x.name === name && x.scope === s);
+      if (!orig) break;
+      at = row !== undefined ? [row, ...at] : at;
+      cur = orig;
+    }
+    return { name: cur.name, scope: cur.scope, index: at };
+  }
+
+  /** Para onde aponta o ponteiro de `*p`. */
+  private pointee(e: Expr, scope: string): VarRef {
+    if (e.k !== "ident") {
+      throw new Error(
+        `O '*' só pode vir antes do nome de um ponteiro (ex.: *p). Aritmética de ponteiros, como '*(p + 1)', não é suportada pelo simulador.`,
+      );
+    }
+    const p = this.findVar(e.name, scope);
+    if (!p) throw new Error(`Variável '${e.name}' não declarada.`);
+    if (!p.pointer) {
+      throw new Error(
+        `Em '*${e.name}', '${e.name}' não é um ponteiro (é ${p.type}${p.dims ? " [vetor]" : ""}). O '*' antes do nome acessa a variável para onde um ponteiro aponta; um ponteiro é declarado assim: ${p.type} *${e.name};`,
+      );
+    }
+    if (p.uninit) {
+      throw new Error(
+        `O ponteiro '${e.name}' ainda não recebeu um endereço: '*${e.name}' acessaria um lugar qualquer da memória. Faça-o apontar para uma variável antes, ex.: ${e.name} = &x;`,
+      );
+    }
+    if (!p.target) {
+      throw new Error(
+        `O ponteiro '${e.name}' vale NULL (não aponta para nenhuma variável), então '*${e.name}' não tem o que acessar.`,
+      );
+    }
+    return p.target;
+  }
+
+  /**
+   * Endereço a guardar num ponteiro: `&x`, `&v[i]`, o valor de outro ponteiro
+   * ou NULL (null). Devolve undefined quando a expressão não é um endereço.
+   */
+  private evalAddress(e: Expr, scope: string): VarRef | null | undefined {
+    if (e.k === "addr") return this.locOf(e.a, scope);
+    if (e.k === "num" && e.v === 0) return null;
+    if (e.k === "ident") {
+      if (e.name === "NULL") return null;
+      const v = this.findVar(e.name, scope);
+      if (v?.pointer) {
+        if (v.uninit) {
+          throw new Error(
+            `O ponteiro '${e.name}' ainda não recebeu um endereço, então não há endereço para copiar dele.`,
+          );
+        }
+        return v.target ?? null;
+      }
+    }
+    return undefined;
+  }
+
+  /**
+   * Confere que o endereço é de uma variável do tipo certo: em C um `int *`
+   * não aponta para um `float` (os bits seriam lidos do jeito errado).
+   */
+  private checkTargetType(t: VarRef, type: CType, what: string) {
+    const v = this.refVar(t);
+    if (v.pointer) {
+      throw new Error(
+        `${what}, mas '${refText(t)}' é um ponteiro: o simulador não aceita ponteiro para ponteiro.`,
+      );
+    }
+    if (v.type !== type) {
+      throw new Error(
+        `${what}, mas '${refText(t)}' é ${v.type}. O tipo apontado precisa ser o mesmo: ${type} com ${type}.`,
+      );
+    }
+  }
+
+  /** Cria a variável ponteiro, já apontando para `t` (undefined = sem valor ainda). */
+  private pointerVar(
+    name: string,
+    type: CType,
+    t: VarRef | null | undefined,
+    scope: string,
+    justCreated: boolean,
+  ): Variable {
+    const v: Variable = { name, type, value: 0, scope, justCreated, pointer: true };
+    this.aimPointer(v, t);
+    return v;
+  }
+
+  private aimPointer(p: Variable, t: VarRef | null | undefined) {
+    p.target = t;
+    p.uninit = t === undefined;
+    // O valor visível é o próprio endereço, como o aluno o escreveria (`&x`).
+    p.value = t ? "&" + refText(t) : 0;
+  }
+
+  /** Cria a referência `int &r`: outro nome para a variável `t`. */
+  private refVarFor(
+    name: string,
+    type: CType,
+    t: VarRef,
+    scope: string,
+    justCreated: boolean,
+  ): Variable {
+    return {
+      name,
+      type,
+      value: this.readRef(t),
+      uninit: this.refUninit(t),
+      scope,
+      justCreated,
+      ref: t,
+    };
   }
 
   /**
@@ -870,14 +1089,9 @@ export class CInterpreter {
    * a variável é nova em C — empilhar uma segunda deixaria o `findVar`
    * enxergando eternamente a primeira, com o valor congelado da 1ª iteração.
    */
-  private declareVar(
-    type: CType,
-    it: { name: string; init: Expr | null; dims?: number[]; arrayInit?: ArrayInit },
-    scope: string,
-    justCreated: boolean,
-  ) {
+  private declareVar(type: CType, it: DeclItem, scope: string, justCreated: boolean) {
     const calc =
-      justCreated && it.init && !it.dims
+      justCreated && it.init && !it.dims && !it.pointer && !it.ref
         ? this.buildCalc(it.init, scope, { value: 0, empty: true })
         : undefined;
     const v = this.makeVarFromItem(type, it, scope, justCreated);
@@ -890,10 +1104,40 @@ export class CInterpreter {
   /** Cria um Variable a partir de um item de declaração, lidando com escalares, vetores e matrizes. */
   private makeVarFromItem(
     type: CType,
-    it: { name: string; init: Expr | null; dims?: number[]; arrayInit?: ArrayInit },
+    it: DeclItem,
     scope: string,
     justCreated: boolean,
   ): Variable {
+    if (it.pointer) {
+      const t = it.init ? this.evalAddress(it.init, scope) : undefined;
+      if (it.init && t === undefined) {
+        throw new Error(
+          `O ponteiro '${it.name}' guarda um ENDEREÇO, mas recebeu o valor '${this.exprToString(it.init)}'. Use o '&' para pegar o endereço de uma variável: ${type} *${it.name} = &${this.exprToString(it.init)};`,
+        );
+      }
+      if (t)
+        this.checkTargetType(
+          t,
+          type,
+          `O ponteiro '${type} *${it.name}' só pode apontar para ${type}`,
+        );
+      return this.pointerVar(it.name, type, t, scope, justCreated);
+    }
+    if (it.ref) {
+      const init = it.init!;
+      if (init.k !== "ident" && init.k !== "index" && init.k !== "deref") {
+        throw new Error(
+          `A referência '${type} &${it.name}' precisa ser outro nome para uma VARIÁVEL, mas recebeu '${this.exprToString(init)}'.`,
+        );
+      }
+      const t = this.locOf(init, scope);
+      this.checkTargetType(
+        t,
+        type,
+        `A referência '${type} &${it.name}' só pode ser outro nome para um ${type}`,
+      );
+      return this.refVarFor(it.name, type, t, scope, justCreated);
+    }
     if (it.dims && it.dims.length > 0) {
       const zero = type === "char" ? "" : 0;
       let value: (number | string)[] | (number | string)[][];
@@ -972,8 +1216,12 @@ export class CInterpreter {
         return `${e.op}${this.exprToString(e.a)}`;
       case "assign": {
         const idx = e.indices ? e.indices.map((i) => `[${this.exprToString(i)}]`).join("") : "";
-        return `${e.name}${idx} = ${this.exprToString(e.v)}`;
+        return `${e.deref ? "*" : ""}${e.name}${idx} = ${this.exprToString(e.v)}`;
       }
+      case "addr":
+        return `&${this.exprToString(e.a)}`;
+      case "deref":
+        return `*${this.exprToString(e.a)}`;
       case "call":
         return `${e.name}(${e.args.map((a) => this.exprToString(a)).join(", ")})`;
       case "index":
@@ -1034,6 +1282,13 @@ export class CInterpreter {
       case "assign":
         this.collectIdentValues(e.v, scope, out);
         break;
+      case "deref":
+        try {
+          out.push(`*${this.exprToString(e.a)} = ${this.evalExpr(e, scope)}`);
+        } catch {
+          /* ignore */
+        }
+        break;
       default:
         break;
     }
@@ -1049,7 +1304,7 @@ export class CInterpreter {
     idxs: number[],
   ): VarCalc | undefined {
     try {
-      const prev = this.getIndexed(target.name, scope, idxs);
+      const prev = this.getIndexed(target.name, target.scope, idxs);
       const cells = target.uninitCells as (boolean | boolean[])[] | undefined;
       const row = cells?.[idxs[0]];
       const empty = !!(Array.isArray(row) ? row[idxs[1]] : row);
@@ -1084,6 +1339,11 @@ export class CInterpreter {
 
   /** Texto de uma folha da conta: o nome (`a`, `v[i]`) ou o valor guardado nela. */
   private calcLeafText(e: Expr, scope: string, withValues: boolean): string | undefined {
+    if (e.k === "deref" && e.a.k === "ident") {
+      if (!withValues) return `*${e.a.name}`;
+      const t = this.pointee(e.a, scope);
+      return calcValueText(this.refVar(t).type, this.readRef(t));
+    }
     if (e.k === "ident" || e.k === "index") {
       if (!withValues) {
         if (e.k === "ident") return e.name;
@@ -1115,8 +1375,15 @@ export class CInterpreter {
         const v = this.findVar(e.name, scope);
         if (!v) throw new Error(`Variável '${e.name}' não declarada.`);
         if (v.dims) throw new Error(`'${e.name}' é um vetor — use índices, ex.: '${e.name}[0]'.`);
+        if (v.ref) return this.readRef(v.ref);
         return v.value as number | string;
       }
+      case "deref":
+        return this.readRef(this.pointee(e.a, scope));
+      case "addr":
+        throw new Error(
+          `'&${this.exprToString(e.a)}' é um endereço de memória: ele só pode ser guardado num ponteiro (int *p = &x;) ou passado a uma função que recebe ponteiro (void f(int *p)).`,
+        );
       case "index": {
         const idxs = e.indices.map((ix) => Math.trunc(Number(this.evalExpr(ix, scope))));
         return this.getIndexed(e.name, scope, idxs);
@@ -1125,6 +1392,45 @@ export class CInterpreter {
         // Os valores da conta são lidos ANTES da atribuição: em `c = c + 1`
         // a animação precisa mostrar o `c` antigo.
         const target = this.findVar(e.name, scope);
+        const indexed = !!e.indices && e.indices.length > 0;
+        // `p = &x;` muda para onde o ponteiro aponta — não o valor apontado.
+        if (target?.pointer && !e.deref && !indexed) {
+          const t = this.evalAddress(e.v, scope);
+          if (t === undefined) {
+            throw new Error(
+              `'${e.name}' é um ponteiro: ele guarda um ENDEREÇO, não um valor. Para mudar a variável para onde ele aponta use '*${e.name} = ${this.exprToString(e.v)};'; para apontar para outra variável use '${e.name} = &variavel;'.`,
+            );
+          }
+          if (t)
+            this.checkTargetType(
+              t,
+              target.type,
+              `O ponteiro '${e.name}' só pode apontar para ${target.type}`,
+            );
+          this.aimPointer(target, t);
+          target.justChanged = true;
+          return target.value as number | string;
+        }
+        // `*p = …` e a referência `r = …` escrevem na variável original, e é
+        // no cartão dela que a conta é animada.
+        const loc = e.deref
+          ? this.pointee({ k: "ident", name: e.name }, scope)
+          : target?.ref && !indexed
+            ? target.ref
+            : null;
+        if (loc) {
+          const orig = this.refVar(loc);
+          const v = this.evalExpr(e.v, scope);
+          const calc = loc.index
+            ? this.indexedCalc(e.v, scope, orig, loc.index)
+            : this.buildCalc(e.v, scope, {
+                value: orig.value as number | string,
+                empty: !!orig.uninit,
+              });
+          this.writeRef(loc, v);
+          if (calc) orig.calc = calc;
+          return this.readRef(loc);
+        }
         const v = this.evalExpr(e.v, scope);
         if (e.indices && e.indices.length > 0) {
           const idxs = e.indices.map((ix) => Math.trunc(Number(this.evalExpr(ix, scope))));
@@ -1149,19 +1455,18 @@ export class CInterpreter {
         if (e.op === "-") return -(a as number);
         if (e.op === "+") return +(a as number);
         if (e.op === "!") return a ? 0 : 1;
-        if (e.op === "pre++" || e.op === "pre--") {
-          if (e.a.k !== "ident") throw new Error("++/-- requer variável");
-          const cur = this.findVar(e.a.name, scope)!.value as number;
-          const nv = e.op === "pre++" ? cur + 1 : cur - 1;
-          this.setVar(e.a.name, scope, nv);
-          return nv;
-        }
-        if (e.op === "post++" || e.op === "post--") {
-          if (e.a.k !== "ident") throw new Error("++/-- requer variável");
-          const cur = this.findVar(e.a.name, scope)!.value as number;
-          const nv = e.op === "post++" ? cur + 1 : cur - 1;
-          this.setVar(e.a.name, scope, nv);
-          return cur;
+        if (e.op.endsWith("++") || e.op.endsWith("--")) {
+          if (e.a.k !== "ident" && e.a.k !== "index" && e.a.k !== "deref")
+            throw new Error("++/-- requer variável");
+          // `a` já é o valor atual — também através de referência ou de `*p`.
+          const cur = typeof a === "string" ? a.charCodeAt(0) || 0 : a;
+          const nv = e.op.endsWith("++") ? cur + 1 : cur - 1;
+          // `p++` num ponteiro seria aritmética de ponteiros: o setVar explica.
+          if (e.a.k === "ident" && this.findVar(e.a.name, scope)?.pointer)
+            this.setVar(e.a.name, scope, nv);
+          const loc = this.locOf(e.a, scope);
+          this.writeRef(loc, nv);
+          return e.op.startsWith("pre") ? this.readRef(loc) : cur;
         }
         return 0;
       }
@@ -1374,6 +1679,8 @@ export class CInterpreter {
     return fn.params.map((p, i): Variable => {
       const a = args[i];
       if (p.dims) return this.arrayParam(fn, p, a, argScope, scope, justCreated);
+      if (p.pointer) return this.pointerParam(fn, p, a, argScope, scope, justCreated);
+      if (p.ref) return this.refParam(fn, p, a, argScope, scope, justCreated);
       // Vetor inteiro num parâmetro simples: avisar antes do erro genérico do evalExpr.
       if (a && (a.k === "ident" || a.k === "index")) {
         const v = this.findVar(a.name, argScope);
@@ -1392,6 +1699,72 @@ export class CInterpreter {
         justCreated,
       };
     });
+  }
+
+  /**
+   * Parâmetro ponteiro (`int *a`): a passagem por referência do C. A função
+   * recebe o ENDEREÇO (`troca(&x, &y)`) e, pelo `*a`, lê e altera o original.
+   */
+  private pointerParam(
+    fn: FnDef,
+    p: FnParam,
+    a: Expr | undefined,
+    argScope: string,
+    scope: string,
+    justCreated: boolean,
+  ): Variable {
+    const decl = `${p.type} *${p.name}`;
+    if (!a) {
+      throw new Error(
+        `Faltou passar um endereço para o parâmetro '${decl}' da função '${fn.name}'.`,
+      );
+    }
+    // Um vetor passado a `int *v` é o endereço do 1º item: vale como `int v[]`.
+    if (a.k === "ident" && this.findVar(a.name, argScope)?.dims?.length === 1) {
+      const asArray: FnParam = { type: p.type, name: p.name, dims: [0] };
+      return this.arrayParam(fn, asArray, a, argScope, scope, justCreated);
+    }
+    const t = this.evalAddress(a, argScope);
+    if (t === undefined) {
+      const hint =
+        a.k === "ident" || a.k === "index"
+          ? ` Para a função poder alterar '${this.exprToString(a)}', passe o endereço com '&': escreva '&${this.exprToString(a)}' na chamada de ${fn.name}.`
+          : "";
+      throw new Error(
+        `A função '${fn.name}' espera um ENDEREÇO em '${decl}', mas recebeu o valor '${this.exprToString(a)}'.${hint}`,
+      );
+    }
+    if (t) {
+      this.checkTargetType(
+        t,
+        p.type,
+        `A função '${fn.name}' espera o endereço de um ${p.type} em '${decl}'`,
+      );
+    }
+    return this.pointerVar(p.name, p.type, t, scope, justCreated);
+  }
+
+  /**
+   * Parâmetro referência (`int &a`, C++/Arduino): o parâmetro É a variável de
+   * quem chamou, com outro nome — `dobra(x)` sem '&' na chamada.
+   */
+  private refParam(
+    fn: FnDef,
+    p: FnParam,
+    a: Expr | undefined,
+    argScope: string,
+    scope: string,
+    justCreated: boolean,
+  ): Variable {
+    const decl = `${p.type} &${p.name}`;
+    if (!a || (a.k !== "ident" && a.k !== "index" && a.k !== "deref")) {
+      throw new Error(
+        `A função '${fn.name}' recebe '${decl}' por referência: é preciso passar uma VARIÁVEL (ex.: ${fn.name}(x)), mas recebeu ${a ? `'${this.exprToString(a)}'` : "nada"}.`,
+      );
+    }
+    const t = this.locOf(a, argScope);
+    this.checkTargetType(t, p.type, `A função '${fn.name}' espera um ${p.type} em '${decl}'`);
+    return this.refVarFor(p.name, p.type, t, scope, justCreated);
   }
 
   /**
@@ -1734,6 +2107,19 @@ export class CInterpreter {
             return `\nO parâmetro '${p.name}' é o próprio vetor '${src}', não uma cópia: o que a função mudar em '${p.name}' muda em '${src}'.`;
           })
           .join("");
+        const byRef = params
+          .map((p) => {
+            if (p.ref) {
+              const src = refText(p.ref);
+              return `\nO parâmetro '${p.name}' é uma referência: é outro nome para '${src}' — o que a função mudar em '${p.name}' muda em '${src}'.`;
+            }
+            if (p.pointer && p.target) {
+              const src = refText(p.target);
+              return `\nO parâmetro '${p.name}' recebeu o endereço de '${src}' (&${src}): pelo '*${p.name}' a função lê e altera o próprio '${src}'.`;
+            }
+            return "";
+          })
+          .join("");
         // Empilhar o block-end (com callExpr para gravar valor de retorno) e o corpo.
         this.stack.push({
           kind: "block-end",
@@ -1751,7 +2137,8 @@ export class CInterpreter {
           line: fn.line ?? 0,
           message:
             `Executando a função '${fn.name}' (definida na linha ${fn.line ?? "?"}) — vamos percorrê-la passo a passo.` +
-            shared,
+            shared +
+            byRef,
           highlight: fn.line
             ? { line: fn.line, colStart: 1, colEnd: fn.headerEndCol ?? 9999 }
             : undefined,
@@ -1902,7 +2289,7 @@ export class CInterpreter {
         this.state.loopIterations += 1;
         // Cada iteração de loop é "recente" — esquecer anúncios anteriores
         // para que pin-reads e chamadas de função sejam re-executados passo a passo.
-        this.announcedCalls = new WeakSet<Stmt>();
+        this.announcedCalls = new WeakMap<Stmt, Set<string>>();
         const iter = this.state.loopIterations;
         // Re-empilha o trampolim (próxima iteração) por baixo.
         this.stack.unshift({ kind: "loop-iteration", line: this.loopFn.line ?? 0 });
@@ -1973,6 +2360,8 @@ export class CInterpreter {
           visitExpr(x.b);
           break;
         case "un":
+        case "addr":
+        case "deref":
           visitExpr(x.a);
           break;
         case "assign":
@@ -2066,10 +2455,14 @@ export class CInterpreter {
   private execStmt(s: Stmt, scope: string): StepEvent {
     // Antes de executar a stmt, se ela contém chamadas a funções do usuário ou
     // leituras de pino, executamos cada uma passo-a-passo antes de re-executar.
-    if (!this.announcedCalls.has(s)) {
+    const announced = this.announcedCalls.get(s);
+    if (announced?.has(scope)) {
+      announced.delete(scope);
+    } else {
       const calls = this.collectUserCalls(s, scope);
       if (calls.length > 0) {
-        this.announcedCalls.add(s);
+        if (announced) announced.add(scope);
+        else this.announcedCalls.set(s, new Set([scope]));
         // Re-empilha a stmt para ser executada DEPOIS que todas as chamadas rodarem.
         this.stack.push({ kind: "stmt", stmt: s, scope });
         this.pushPendingCalls(calls, scope, s.line);
@@ -2099,11 +2492,23 @@ export class CInterpreter {
         // detectar atribuição para mensagem mais clara
         if (s.e.k === "assign") {
           this.evalExpr(s.e, scope);
+          const v = this.findVar(s.e.name, scope);
+          // Escrita através de ponteiro/referência: dizer QUAL variável mudou.
+          const via = s.e.deref ? v?.target : !s.e.indices?.length ? v?.ref : undefined;
+          const where = via
+            ? via.scope === scope
+              ? `'${refText(via)}'`
+              : `'${refText(via)}' de ${scopeLabel(via.scope)}`
+            : "";
           return {
             kind: "update-var",
             line: s.line,
-            message: `Atualizando '${s.e.name}'`,
-            varName: s.e.name,
+            message: via
+              ? s.e.deref
+                ? `Guardando em '*${s.e.name}' — ou seja, na variável ${where}, para onde '${s.e.name}' aponta.`
+                : `Atualizando '${s.e.name}' — que é outro nome para ${where}.`
+              : `Atualizando '${s.e.name}'`,
+            varName: via ? via.name : s.e.name,
           };
         }
         this.evalExpr(s.e, scope);
@@ -2116,8 +2521,40 @@ export class CInterpreter {
       case "scanf": {
         if (s.targets.length === 0) return { kind: "noop", line: s.line, message: "scanf vazio." };
         const tgt = s.targets[0];
-        const v = this.findVar(tgt.name, scope);
+        let v = this.findVar(tgt.name, scope);
         if (!v) throw new Error(`Variável '${tgt.name}' não declarada (scanf).`);
+        // Ponteiro (`scanf("%d", n)` com `int *n`) e referência (`&r`) levam o
+        // scanf até a variável original — é nela que o valor lido é guardado.
+        let via: VarRef | undefined;
+        if (v.pointer && !tgt.indices?.length) {
+          if (tgt.byAddress) {
+            throw new Error(
+              `'${tgt.name}' já é um ponteiro (guarda um endereço): no scanf da linha ${s.line} use '${tgt.name}', sem o '&' — scanf("...", ${tgt.name});`,
+            );
+          }
+          via = this.pointee({ k: "ident", name: tgt.name }, scope);
+        } else if (v.ref && tgt.byAddress && !tgt.indices?.length) {
+          via = v.ref;
+        }
+        if (via) {
+          v = this.refVar(via);
+          const resolved: ScanfTarget = { ...tgt, name: v.name, byAddress: true };
+          if (via.index) resolved.indices = via.index.map((n): Expr => ({ k: "num", v: n }));
+          else delete resolved.indices;
+          // Os demais alvos continuam no escopo de quem chamou o scanf; só este
+          // é lido no escopo da variável original.
+          if (s.targets.length > 1) {
+            const rest: Stmt = {
+              k: "scanf",
+              fmt: s.fmt,
+              targets: s.targets.slice(1),
+              line: s.line,
+            };
+            this.stack.push({ kind: "stmt", stmt: rest, scope });
+          }
+          const one: Stmt = { k: "scanf", fmt: s.fmt, targets: [resolved], line: s.line };
+          return this.execStmt(one, via.scope);
+        }
         // Sem o '&', o scanf recebe o VALOR e não teria onde guardar a leitura.
         // A exceção é o nome de um vetor (ou uma linha de matriz, `nomes[i]`),
         // que já é o endereço do primeiro item.

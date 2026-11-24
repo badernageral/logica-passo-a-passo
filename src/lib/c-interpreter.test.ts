@@ -886,3 +886,95 @@ describe("Conta animada na atribuição (calc)", () => {
     ).toEqual([]);
   });
 });
+
+describe("Passagem por referência (ponteiros e referências)", () => {
+  const H = "#include <stdio.h>\n";
+  const TROCA = "void troca(int *a, int *b) { int t = *a; *a = *b; *b = t; }\n";
+
+  it("troca(&x, &y) com int *a altera as variáveis de quem chamou", () => {
+    const src =
+      H + TROCA + `int main() { int x = 1, y = 2; troca(&x, &y); printf("%d %d", x, y); }`;
+    expect(out(src)).toBe("2 1");
+  });
+
+  it("aceita endereço de item de vetor (bolha com troca)", () => {
+    const src =
+      H +
+      TROCA +
+      `int main() { int v[4] = {4, 3, 2, 1}; int i, j; for (i = 0; i < 4; i++) for (j = 0; j < 3; j++) if (v[j] > v[j + 1]) troca(&v[j], &v[j + 1]); printf("%d%d%d%d", v[0], v[1], v[2], v[3]); }`;
+    expect(out(src)).toBe("1234");
+  });
+
+  it("scanf no ponteiro (sem '&'), (*n)++ e *n += 1 escrevem no original", () => {
+    const src =
+      H +
+      `void ler(int *n) { scanf("%d", n); (*n)++; *n += 10; }\nint main() { int a, b; ler(&a); ler(&b); printf("%d %d", a, b); }`;
+    expect(out(src, ["1", "5"])).toBe("12 16");
+  });
+
+  it("ponteiro local: int *p = &x, *p = …, p = NULL", () => {
+    const src =
+      H +
+      `int main() { int x = 1, y = 2; int *p = &x; *p = 7; p = &y; *p = *p + 1; p = NULL; if (p == NULL) printf("%d %d", x, y); }`;
+    expect(out(src)).toBe("7 3");
+  });
+
+  it("referência do C++ (int &a) no Arduino", () => {
+    const src = `void dobra(int &a) { a = a * 2; a++; }\nvoid setup() { Serial.begin(9600); int x = 3; dobra(x); Serial.println(x); }\nvoid loop() {}`;
+    expect(run(src, [], 200).serial.trim().split("\n")[0]).toBe("7");
+  });
+
+  it("int *v recebendo um vetor funciona como int v[]", () => {
+    const src =
+      H +
+      `void zera(int *v, int n) { int i; for (i = 0; i < n; i++) v[i] = 0; }\nint main() { int v[3] = {1, 2, 3}; zera(v, 3); printf("%d%d%d", v[0], v[1], v[2]); }`;
+    expect(out(src)).toBe("000");
+  });
+
+  it("o cartão do ponteiro mostra o endereço e o original acende", () => {
+    const interp = new CInterpreter(H + TROCA + `int main() { int x = 1, y = 2; troca(&x, &y); }`);
+    let sawPointer = false;
+    let xLit = false;
+    for (let i = 0; i < 200 && !interp.state.finished && !interp.state.error; i++) {
+      const ev = interp.step();
+      const a = interp.state.variables.find((v) => v.name === "a");
+      if (a?.pointer && a.value === "&x" && a.target?.name === "x") sawPointer = true;
+      if (/Guardando em '\*a'/.test(ev.message)) {
+        xLit = !!interp.state.variables.find((v) => v.name === "x")?.justChanged;
+      }
+    }
+    expect(sawPointer).toBe(true);
+    expect(xLit).toBe(true);
+  });
+
+  it("esquecer o '&' na chamada vira erro didático", () => {
+    const { state } = run(H + TROCA + `int main() { int x = 1, y = 2; troca(x, y); }`);
+    expect(state.error).toMatch(/espera um ENDEREÇO em 'int \*a'.*'&x'/);
+  });
+
+  it("*p com ponteiro sem endereço vira erro didático", () => {
+    const { state } = run(H + `int main() { int *p; *p = 3; }`);
+    expect(state.error).toMatch(/ainda não recebeu um endereço/);
+  });
+
+  it("ponteiro de outro tipo é recusado", () => {
+    const { state } = run(H + `int main() { float f = 1.5; int *p = &f; }`);
+    expect(state.error).toMatch(/'f' é float/);
+  });
+});
+
+describe("Chamadas de função dentro de laços", () => {
+  it("rodam passo a passo em TODAS as voltas (scanf dentro da função)", () => {
+    const src = `#include <stdio.h>\nvoid ler() { int a; scanf("%d", &a); printf("%d ", a); }\nint main() { int i; for (i = 0; i < 3; i++) ler(); }`;
+    const interp = new CInterpreter(src);
+    let calls = 0;
+    const inputs = ["4", "5", "6"];
+    for (let i = 0; i < 500 && !interp.state.finished && !interp.state.error; i++) {
+      if (interp.state.awaitingInput) interp.provideInput(inputs.shift() ?? "0");
+      else if (interp.step().kind === "call-function") calls++;
+    }
+    expect(interp.state.error).toBeNull();
+    expect(interp.state.output.map((o) => o.text).join("")).toBe("4 5 6 ");
+    expect(calls).toBe(4); // main + 3 × ler
+  });
+});
